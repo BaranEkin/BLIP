@@ -7,13 +7,16 @@ from torch.utils.data import Dataset
 
 
 class bev_pretrain_dataset(Dataset):
-    def __init__(self, bev_features_folder_path, scene_statements_path):
-        self.nusc_samples = []
+    def __init__(self, bev_features_folder_path, scene_statements_path, nusc_sample_path):
+        
+        with open(nusc_sample_path, "r") as nusc_sample_json:
+            self.nusc_samples = json.load(nusc_sample_json)
+
+        with open(scene_statements_path, "r") as scene_statements_json:
+            self.scene_statements = json.load(scene_statements_json)
         
         self.bev_files_list = glob.glob(os.path.join(bev_features_folder_path, "*.pt"))
         
-        with open(scene_statements_path, "r") as scene_statements_json:
-            self.scene_statements = json.load(scene_statements_json)
         
     def get_scene_token(self, sample_token):
         for sample in self.nusc_samples:
@@ -34,9 +37,10 @@ class bev_pretrain_dataset(Dataset):
         bev_filename = self.bev_files_list[index]
         with open(bev_filename, "rb") as bev_file:
             bev = torch.load(bev_file)
+            bev = bev.squeeze()
         
         # Statement -------------------------------------
-        sample_idx = bev_filename[:-3]
+        sample_idx = bev_filename[bev_filename.rfind("/")+1:-3]
         scene_token = self.get_scene_token(sample_idx)
         statement = self.get_scene_statement(scene_token)
 

@@ -1,10 +1,3 @@
-'''
- * Copyright (c) 2022, salesforce.com, inc.
- * All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause
- * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
- * By Junnan Li
-'''
 from models.med import BertConfig, BertModel, BertLMHeadModel
 from transformers import BertTokenizer
 import transformers
@@ -16,16 +9,12 @@ import torch.nn.functional as F
 
 from models.blip import create_vit, init_tokenizer, load_checkpoint
 
-class BLIP_Pretrain(nn.Module):
+class BLIP_BEV_Pretrain(nn.Module):
     def __init__(self,                 
-                 med_config = 'configs/bert_config.json',  
-                 bev_size = 224,
-                 vit = 'base',
-                 vit_grad_ckpt = False,
-                 vit_ckpt_layer = 0,                    
-                 embed_dim = 256,     
-                 queue_size = 57600,
-                 momentum = 0.995,
+                 med_config='configs/bert_config.json',                
+                 embed_dim=512,     
+                 queue_size=57600,
+                 momentum=0.995,
                  ):
         """
         Args:
@@ -33,7 +22,7 @@ class BLIP_Pretrain(nn.Module):
             bev_size (int): input bev size
         """               
         super().__init__()
-        self.bev_width = None # 768, 1024     
+        self.bev_width = 256 # 768, 1024     
         self.device = "cuda"
                
         self.tokenizer = init_tokenizer()   
@@ -177,7 +166,7 @@ class BLIP_Pretrain(nn.Module):
         vl_output = self.itm_head(vl_embeddings)            
 
         itm_labels = torch.cat([torch.ones(bs,dtype=torch.long),torch.zeros(2*bs,dtype=torch.long)],
-                               dim=0).to(bev.device)
+                               dim=0).to(self.device)
         loss_itm = F.cross_entropy(vl_output, itm_labels)  
         
         ##================= LM ========================##     
@@ -232,11 +221,6 @@ class BLIP_Pretrain(nn.Module):
         self.queue_ptr[0] = ptr 
 
 
-def blip_pretrain(**kwargs):
-    model = BLIP_Pretrain(**kwargs)
-    return model 
-
-
 @torch.no_grad()
 def concat_all_gather(tensor):
     """
@@ -254,10 +238,7 @@ def concat_all_gather(tensor):
 from typing import List
 def tie_encoder_decoder_weights(encoder: nn.Module, decoder: nn.Module, base_model_prefix: str, skip_key:str):
     uninitialized_encoder_weights: List[str] = []
-    if decoder.__class__ != encoder.__class__:
-        logger.info(
-            f"{decoder.__class__} and {encoder.__class__} are not equal. In this case make sure that all encoder weights are correctly initialized."
-        )
+    assert decoder.__class__ == encoder.__class__
 
     def tie_encoder_to_decoder_recursively(
         decoder_pointer: nn.Module,
