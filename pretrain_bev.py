@@ -137,6 +137,8 @@ def main(args, config):
 
 
 if __name__ == '__main__':
+    torch.cuda.empty_cache()
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='./configs/pretrain_bev.yaml')
     parser.add_argument('--output_dir', default='output/Pretrain_BEV')  
