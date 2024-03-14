@@ -12,7 +12,7 @@ from models.blip import create_vit, init_tokenizer, load_checkpoint
 class BLIP_BEV_Pretrain(nn.Module):
     def __init__(self,                 
                  med_config='configs/bert_config.json',                
-                 embed_dim=512,     
+                 embed_dim=256,     
                  queue_size=57600,
                  momentum=0.995,
                  ):

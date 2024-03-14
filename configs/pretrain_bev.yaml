@@ -4,10 +4,10 @@ scene_statements: '/workspace/BLIP/data_thesis/scene_statements.json'
 nuscenes_sample: '/workspace/BLIP/data_thesis/sample.json'
 
 # batch_size: 75
-batch_size: 5
+batch_size: 2
 
 # queue_size: 57600
-queue_size: 100
+queue_size: 10
 alpha: 0.4
 
 # optimizer
