@@ -11,7 +11,8 @@ from models.blip import create_vit, init_tokenizer, load_checkpoint
 
 class BLIP_BEV_Pretrain(nn.Module):
     def __init__(self,                 
-                 med_config='configs/bert_config.json',                
+                 med_config='configs/bert_config.json',
+                 blip_ckpt='ckpts/model_base_capfilt_large.pth',               
                  embed_dim=256,     
                  queue_size=57600,
                  momentum=0.995,
@@ -27,19 +28,21 @@ class BLIP_BEV_Pretrain(nn.Module):
                
         self.tokenizer = init_tokenizer()   
         encoder_config = BertConfig.from_json_file(med_config)
-        encoder_config.encoder_width = self.bev_width
         self.text_encoder = BertModel.from_pretrained('bert-base-uncased',config=encoder_config, add_pooling_layer=False)
         self.text_encoder.resize_token_embeddings(len(self.tokenizer)) 
 
+        # FC layer to map BEV feature size to cross attention width
+        self.bev_mapper = nn.Linear(self.bev_width, 768).to(self.device)
+
         text_width = self.text_encoder.config.hidden_size
         
-        self.bev_proj = nn.Linear(self.bev_width, embed_dim)
+        self.bev_proj = nn.Linear(768, embed_dim)
         self.text_proj = nn.Linear(text_width, embed_dim)
 
         self.itm_head = nn.Linear(text_width, 2) 
         
         # create momentum encoders      
-        self.bev_proj_m = nn.Linear(self.bev_width, embed_dim)
+        self.bev_proj_m = nn.Linear(768, embed_dim)
         self.text_encoder_m = BertModel(config=encoder_config, add_pooling_layer=False)      
         self.text_proj_m = nn.Linear(text_width, embed_dim)
         
@@ -62,17 +65,20 @@ class BLIP_BEV_Pretrain(nn.Module):
         self.temp = nn.Parameter(0.07*torch.ones([]))   
         
         # create the decoder
-        decoder_config = BertConfig.from_json_file(med_config)
-        decoder_config.encoder_width = self.bev_width        
+        decoder_config = BertConfig.from_json_file(med_config)     
         self.text_decoder = BertLMHeadModel.from_pretrained('bert-base-uncased',config=decoder_config)    
         self.text_decoder.resize_token_embeddings(len(self.tokenizer)) 
         tie_encoder_decoder_weights(self.text_encoder,self.text_decoder.bert,'','/attention')
+
+        self.load_blip_ckpt(blip_ckpt)
         
-        
+
     def forward(self, bev_embeds, caption, alpha):
         with torch.no_grad():
             self.temp.clamp_(0.001,0.5)
         
+        bev_embeds = self.bev_mapper(bev_embeds)
+
         bev_atts = torch.ones(bev_embeds.size()[:-1],dtype=torch.long).to(self.device)        
         bev_feat = F.normalize(self.bev_proj(bev_embeds[:,0,:]),dim=-1)          
         
@@ -185,8 +191,48 @@ class BLIP_BEV_Pretrain(nn.Module):
         loss_lm = decoder_output.loss                
         return loss_ita, loss_itm, loss_lm
  
+    @torch.no_grad() 
+    def generate(
+        self,
+        bev_embeds,
+        max_length=30,
+        min_length=10,
+        top_p=0.9,
+    ):
+        bs = bev_embeds.size(0)
+        bev_embeds = self.bev_mapper(bev_embeds)
 
+        bev_atts = torch.ones(bev_embeds.size()[:-1], dtype=torch.long).to(self.device)
+        model_kwargs = {
+            "encoder_hidden_states": bev_embeds,
+            "encoder_attention_mask": bev_atts,
+        }
 
+        prompt = [''] * bs # batch size
+        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.device)
+        input_ids[:, 0] = self.tokenizer.bos_token_id
+        input_ids = input_ids[:, :-1]
+
+        # nucleus sampling
+        outputs = self.text_decoder.generate(
+            input_ids=input_ids,
+            max_length=max_length,
+            min_length=min_length,
+            do_sample=True,
+            top_p=top_p,
+            num_return_sequences=1,
+            eos_token_id=self.tokenizer.sep_token_id,
+            pad_token_id=self.tokenizer.pad_token_id,
+            repetition_penalty=1.1,
+            **model_kwargs
+        )
+
+        captions = []
+        for output in outputs:
+            caption = self.tokenizer.decode(output, skip_special_tokens=True)
+            captions.append(caption[len(self.prompt) :])
+        return captions
+    
     @torch.no_grad()    
     def copy_params(self):
         for model_pair in self.model_pairs:           
@@ -220,6 +266,16 @@ class BLIP_BEV_Pretrain(nn.Module):
 
         self.queue_ptr[0] = ptr 
 
+    def load_blip_ckpt(self, ckpt_path):
+
+        ckpt = torch.load(ckpt_path)
+        ckpt_dict = ckpt["model"]
+
+        self_dict = self.state_dict()
+        ckpt_dict = {k: v for k, v in ckpt_dict.items() if k in self_dict}
+        del ckpt_dict["text_queue"]
+        self_dict.update(ckpt_dict)
+        self.load_state_dict(self_dict)
 
 @torch.no_grad()
 def concat_all_gather(tensor):

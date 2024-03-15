@@ -15,8 +15,9 @@ from transform.randaugment import RandomAugment
 def create_dataset(dataset, config, min_scale=0.5):
     
     if dataset=='pretrain_bev':
-        dataset = bev_pretrain_dataset(config['bev_features_folder_train'], config['scene_statements'], config['nuscenes_sample'])
-        return dataset
+        train_dataset = bev_pretrain_dataset(config['bev_features_folder_train'], config['scene_statements'], config['nuscenes_sample'])
+        val_dataset = bev_pretrain_dataset(config['bev_features_folder_val'], config['scene_statements'], config['nuscenes_sample'])
+        return train_dataset, val_dataset
     
     else:
         normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
@@ -38,9 +39,6 @@ def create_dataset(dataset, config, min_scale=0.5):
         if dataset=='pretrain':
             dataset = pretrain_dataset(config['train_file'], config['laion_path'], transform_train)              
             return dataset  
-        
-        elif dataset=='pretrain_bev':
-            dataset = bev_pretrain_dataset(config['bev_features_folder'], config['scene_statements'], config['nuscenes_sample'])
         
         elif dataset=='caption_coco':   
             train_dataset = coco_karpathy_train(transform_train, config['image_root'], config['ann_root'], prompt=config['prompt'])

@@ -11,7 +11,7 @@ import yaml
 import numpy as np
 import random
 import time
-import datetime
+from datetime import datetime
 import json
 from pathlib import Path
 
@@ -21,13 +21,14 @@ import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from models.blip_bev_pretrain import BLIP_BEV_Pretrain
 import utils
 from utils import warmup_lr_schedule, step_lr_schedule
 from data import create_dataset, create_sampler, create_loader
 
-def train(model, data_loader, optimizer, epoch, device, config):
+def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log, gen_freq):
     # train
     model.train()  
     
@@ -65,12 +66,67 @@ def train(model, data_loader, optimizer, epoch, device, config):
         metric_logger.update(loss_lm=loss_lm.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])  
 
+        writer.add_scalar("Loss/Train", loss.item())
+        writer.add_scalar("LR", optimizer.param_groups[0]["lr"])
+        writer.add_scalar("Losses/Train/ITA", loss_ita.item())
+        writer.add_scalar("Losses/Train/ITM", loss_itm.item())
+        writer.add_scalar("Losses/Train/LM", loss_lm.item())
+
+        if i % gen_freq == 0:
+            generate(model, bev, statement, epoch, i, gen_log)
         
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger.global_avg())     
     return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}  
 
+def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_freq):
+    
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
+    metric_logger.add_meter('loss_ita', utils.SmoothedValue(window_size=50, fmt='{value:.4f}'))
+    metric_logger.add_meter('loss_itm', utils.SmoothedValue(window_size=50, fmt='{value:.4f}'))    
+    metric_logger.add_meter('loss_lm', utils.SmoothedValue(window_size=50, fmt='{value:.4f}'))
+
+    header = 'Validation Epoch: [{}]'.format(epoch)
+    print_freq = 50   
+
+    model.eval()
+    with torch.no_grad():
+        for i, (bev, statement) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+
+            bev = bev.to(device,non_blocking=True)
+
+            # ramp up alpha in the first 2 epochs
+            alpha = config['alpha']*min(1,(epoch*len(data_loader)+i)/(2*len(data_loader))) 
+            
+            loss_ita, loss_itm, loss_lm = model(bev, statement, alpha)  
+            loss = loss_ita + loss_itm + loss_lm  
+
+            metric_logger.update(loss_ita=loss_ita.item())
+            metric_logger.update(loss_itm=loss_itm.item())
+            metric_logger.update(loss_lm=loss_lm.item())
+
+            writer.add_scalar("Loss/Val", loss.item())
+            writer.add_scalar("Losses/Val/ITA", loss_ita.item())
+            writer.add_scalar("Losses/Val/ITM", loss_itm.item())
+            writer.add_scalar("Losses/Val/LM", loss_lm.item())
+
+            if i % gen_freq == 0:
+                generate(model, bev, statement, epoch, i, gen_log)
+
+    model.train()
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger.global_avg())     
+    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}  
+
+def generate(model, bev, statement, ep, step, log_file):
+    
+    output = model.generate(bev)
+    print(f"Epoch: {ep}, Step: {step}", file=log_file, flush=True)
+    print(f"GT:\t{statement}", file=log_file, flush=True)
+    print(f"Out:\t{output}", file=log_file, flush=True)
 
 def main(args, config):
     utils.init_distributed_mode(args)    
@@ -85,55 +141,67 @@ def main(args, config):
     cudnn.benchmark = True
 
     #### Dataset #### 
-    print("Creating dataset")
-    datasets = [create_dataset('pretrain_bev', config, min_scale=0.2)]
-    print('number of training samples: %d'%len(datasets[0]))
+    print("Creating datasets")
+    train_dataset, val_dataset = create_dataset('pretrain_bev', config, min_scale=0.2)
+    print('number of training samples: %d'%len(train_dataset))
+    print('number of validation samples: %d'%len(val_dataset))
 
     num_tasks = utils.get_world_size()
-    global_rank = utils.get_rank()            
-    samplers = create_sampler(datasets, [True], num_tasks, global_rank)         
+    global_rank = utils.get_rank()        
 
-    data_loader = create_loader(datasets,samplers,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]      
+    train_sampler = create_sampler([train_dataset], [True], num_tasks, global_rank)        
+    val_sampler = create_sampler([val_dataset], [True], num_tasks, global_rank)  
+
+    train_loader = create_loader([train_dataset],train_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
+    val_loader = create_loader([val_dataset],val_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
 
     #### Model #### 
     model = BLIP_BEV_Pretrain(queue_size=config['queue_size'])
-    model = model.to(device)   
+    model = model.to(device)
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
+    
+    run_name = "Ex1_bs2_qs10_lr_3e-4"
+    todays_date = datetime.now().strftime("%d-%m")
+    sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
     
     start_epoch = 0
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module    
-        
-    print("Start training")
-    start_time = time.time()    
-    for epoch in range(start_epoch, config['max_epoch']):
-        
-        step_lr_schedule(optimizer, epoch, config['init_lr'], config['min_lr'], config['lr_decay_rate'])
-                
-        train_stats = train(model, data_loader, optimizer, epoch, device, config) 
-        if utils.is_main_process():  
-            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         'epoch': epoch,
-                        }                     
-            save_obj = {
-                'model': model_without_ddp.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'config': config,
-                'epoch': epoch,
-            }
-            torch.save(save_obj, os.path.join(args.output_dir, 'checkpoint_%02d.pth'%epoch))  
-            
-            with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
-                f.write(json.dumps(log_stats) + "\n")
 
-        dist.barrier()        
+    with open(f"./logs/log_{todays_date}_{run_name}.txt", "w") as gen_log_file:    
+        
+        print("Start training")
+        start_time = time.time()    
+        for epoch in range(start_epoch, config['max_epoch']):
+            
+            step_lr_schedule(optimizer, epoch, config['init_lr'], config['min_lr'], config['lr_decay_rate'])
+                    
+            train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000) 
+            val_stats = validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
+
+            if utils.is_main_process():  
+                log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                            'epoch': epoch,
+                            }                     
+                save_obj = {
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'config': config,
+                    'epoch': epoch,
+                }
+                torch.save(save_obj, os.path.join(args.output_dir, 'checkpoint_%02d.pth'%epoch))  
                 
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str)) 
+                with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
+                    f.write(json.dumps(log_stats) + "\n")
+
+            dist.barrier()        
+                    
+        total_time = time.time() - start_time
+        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+        print('Training time {}'.format(total_time_str)) 
 
 
 if __name__ == '__main__':
