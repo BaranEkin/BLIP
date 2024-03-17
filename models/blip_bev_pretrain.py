@@ -28,21 +28,29 @@ class BLIP_BEV_Pretrain(nn.Module):
                
         self.tokenizer = init_tokenizer()   
         encoder_config = BertConfig.from_json_file(med_config)
+
+        encoder_config.encoder_width = self.bev_width
+
         self.text_encoder = BertModel.from_pretrained('bert-base-uncased',config=encoder_config, add_pooling_layer=False)
         self.text_encoder.resize_token_embeddings(len(self.tokenizer)) 
 
         # FC layer to map BEV feature size to cross attention width
-        self.bev_mapper = nn.Linear(self.bev_width, 768).to(self.device)
+        # self.bev_mapper = nn.Linear(self.bev_width, 768).to(self.device)
 
         text_width = self.text_encoder.config.hidden_size
         
-        self.bev_proj = nn.Linear(768, embed_dim)
+        # self.bev_proj = nn.Linear(768, embed_dim)
+        self.bev_proj = nn.Linear(self.bev_width, embed_dim)
+
         self.text_proj = nn.Linear(text_width, embed_dim)
 
         self.itm_head = nn.Linear(text_width, 2) 
         
-        # create momentum encoders      
-        self.bev_proj_m = nn.Linear(768, embed_dim)
+        # create momentum encoders
+              
+        # self.bev_proj_m = nn.Linear(768, embed_dim)
+        self.bev_proj_m = nn.Linear(self.bev_width, embed_dim)
+
         self.text_encoder_m = BertModel(config=encoder_config, add_pooling_layer=False)      
         self.text_proj_m = nn.Linear(text_width, embed_dim)
         
@@ -65,19 +73,26 @@ class BLIP_BEV_Pretrain(nn.Module):
         self.temp = nn.Parameter(0.07*torch.ones([]))   
         
         # create the decoder
-        decoder_config = BertConfig.from_json_file(med_config)     
+        decoder_config = BertConfig.from_json_file(med_config) 
+
+        decoder_config.encoder_width = self.bev_width
+
         self.text_decoder = BertLMHeadModel.from_pretrained('bert-base-uncased',config=decoder_config)    
         self.text_decoder.resize_token_embeddings(len(self.tokenizer)) 
         tie_encoder_decoder_weights(self.text_encoder,self.text_decoder.bert,'','/attention')
 
-        self.load_blip_ckpt(blip_ckpt)
+        # self.load_blip_ckpt(blip_ckpt)
+
+        # Prompt
+        self.prompt = ''
+        self.prompt_length = len(self.tokenizer(self.prompt).input_ids) - 1
         
 
     def forward(self, bev_embeds, caption, alpha):
         with torch.no_grad():
             self.temp.clamp_(0.001,0.5)
         
-        bev_embeds = self.bev_mapper(bev_embeds)
+        # bev_embeds = self.bev_mapper(bev_embeds)
 
         bev_atts = torch.ones(bev_embeds.size()[:-1],dtype=torch.long).to(self.device)        
         bev_feat = F.normalize(self.bev_proj(bev_embeds[:,0,:]),dim=-1)          
@@ -191,7 +206,6 @@ class BLIP_BEV_Pretrain(nn.Module):
         loss_lm = decoder_output.loss                
         return loss_ita, loss_itm, loss_lm
  
-    @torch.no_grad() 
     def generate(
         self,
         bev_embeds,
@@ -200,7 +214,7 @@ class BLIP_BEV_Pretrain(nn.Module):
         top_p=0.9,
     ):
         bs = bev_embeds.size(0)
-        bev_embeds = self.bev_mapper(bev_embeds)
+        # bev_embeds = self.bev_mapper(bev_embeds)
 
         bev_atts = torch.ones(bev_embeds.size()[:-1], dtype=torch.long).to(self.device)
         model_kwargs = {

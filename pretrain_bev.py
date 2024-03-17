@@ -66,11 +66,13 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
         metric_logger.update(loss_lm=loss_lm.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])  
 
-        writer.add_scalar("Loss/Train", loss.item())
-        writer.add_scalar("LR", optimizer.param_groups[0]["lr"])
-        writer.add_scalar("Losses/Train/ITA", loss_ita.item())
-        writer.add_scalar("Losses/Train/ITM", loss_itm.item())
-        writer.add_scalar("Losses/Train/LM", loss_lm.item())
+        global_step = epoch * len(data_loader) + i
+
+        writer.add_scalar("Loss/Train", loss.item(), global_step)
+        writer.add_scalar("LR", optimizer.param_groups[0]["lr"], global_step)
+        writer.add_scalar("Losses/Train/ITA", loss_ita.item(), global_step)
+        writer.add_scalar("Losses/Train/ITM", loss_itm.item(), global_step)
+        writer.add_scalar("Losses/Train/LM", loss_lm.item(), global_step)
 
         if i % gen_freq == 0:
             generate(model, bev, statement, epoch, i, gen_log)
@@ -107,10 +109,12 @@ def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_f
             metric_logger.update(loss_itm=loss_itm.item())
             metric_logger.update(loss_lm=loss_lm.item())
 
-            writer.add_scalar("Loss/Val", loss.item())
-            writer.add_scalar("Losses/Val/ITA", loss_ita.item())
-            writer.add_scalar("Losses/Val/ITM", loss_itm.item())
-            writer.add_scalar("Losses/Val/LM", loss_lm.item())
+            global_step = epoch * len(data_loader) + i
+
+            writer.add_scalar("Loss/Val", loss.item(), global_step)
+            writer.add_scalar("Losses/Val/ITA", loss_ita.item(), global_step)
+            writer.add_scalar("Losses/Val/ITM", loss_itm.item(), global_step)
+            writer.add_scalar("Losses/Val/LM", loss_lm.item(), global_step)
 
             if i % gen_freq == 0:
                 generate(model, bev, statement, epoch, i, gen_log)
@@ -124,9 +128,9 @@ def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_f
 def generate(model, bev, statement, ep, step, log_file):
     
     output = model.generate(bev)
-    print(f"Epoch: {ep}, Step: {step}", file=log_file, flush=True)
-    print(f"GT:\t{statement}", file=log_file, flush=True)
-    print(f"Out:\t{output}", file=log_file, flush=True)
+    print(f"\nEpoch: {ep}, Step: {step}", file=log_file, flush=True)
+    print(f"GT:  {statement}", file=log_file, flush=True)
+    print(f"Out: {output}", file=log_file, flush=True)
 
 def main(args, config):
     utils.init_distributed_mode(args)    
@@ -150,10 +154,10 @@ def main(args, config):
     global_rank = utils.get_rank()        
 
     train_sampler = create_sampler([train_dataset], [True], num_tasks, global_rank)        
-    val_sampler = create_sampler([val_dataset], [True], num_tasks, global_rank)  
+    # val_sampler = create_sampler([val_dataset], [True], num_tasks, global_rank)  
 
     train_loader = create_loader([train_dataset],train_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
-    val_loader = create_loader([val_dataset],val_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
+    # val_loader = create_loader([val_dataset],val_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
 
     #### Model #### 
     model = BLIP_BEV_Pretrain(queue_size=config['queue_size'])
@@ -161,15 +165,17 @@ def main(args, config):
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
     
-    run_name = "Ex1_bs2_qs10_lr_3e-4"
+    run_name = "Ex4_bs2_qs8_lr_2e-5_no_ckpt_256"
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
     
     start_epoch = 0
 
+    """
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        model_without_ddp = model.module    
+        model_without_ddp = model.module 
+    """   
 
     with open(f"./logs/log_{todays_date}_{run_name}.txt", "w") as gen_log_file:    
         
@@ -180,19 +186,19 @@ def main(args, config):
             step_lr_schedule(optimizer, epoch, config['init_lr'], config['min_lr'], config['lr_decay_rate'])
                     
             train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000) 
-            val_stats = validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
+            # val_stats = validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
 
             if utils.is_main_process():  
                 log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                             'epoch': epoch,
                             }                     
                 save_obj = {
-                    'model': model_without_ddp.state_dict(),
+                    'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'config': config,
                     'epoch': epoch,
                 }
-                torch.save(save_obj, os.path.join(args.output_dir, 'checkpoint_%02d.pth'%epoch))  
+                torch.save(save_obj, os.path.join(args.output_dir, f'{run_name}_{epoch}.pth'))  
                 
                 with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
                     f.write(json.dumps(log_stats) + "\n")
