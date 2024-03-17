@@ -8,112 +8,144 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.blip import create_vit, init_tokenizer, load_checkpoint
+from models.vit import VisionTransformer
 
 class BLIP_BEV_Pretrain(nn.Module):
     def __init__(self,                 
                  med_config='configs/bert_config.json',
-                 blip_ckpt='ckpts/model_base_capfilt_large.pth',               
+                 blip_ckpt='ckpts/model_base_capfilt_large.pth',  
+                 bev_size=50, 
+                 bev_dim=256,
                  embed_dim=256,     
-                 queue_size=57600,
+                 queue_size=10,
                  momentum=0.995,
                  ):
         """
         Args:
             med_config (str): path for the mixture of encoder-decoder model's configuration file
-            bev_size (int): input bev size
-        """               
+            blip_ckpt (str): path for the blip_pretrain model checkpoint to load
+            bev_size (int): input bev's spatial size (height or width)
+            bev_dim (int): input bev's feature size
+            embed_dim (int): common embedding dim size for visual and text features to be projected onto
+            queue_size (int): queue size
+            momentum (float): momentum parameter for momentum encoders
+        """
+
         super().__init__()
-        self.bev_width = 256 # 768, 1024     
         self.device = "cuda"
-               
-        self.tokenizer = init_tokenizer()   
+
+        self.temp = nn.Parameter(0.07*torch.ones([]))   
+        self.tokenizer = init_tokenizer() 
+        
+        # BEV --------------------------------------------------------------------------------------
+        self.bev_size = bev_size
+        self.bev_dim = bev_dim
+
+        # Visual Encoder ---------------------------------------------------------------------------
+        self.visual_width = 768
+        self.vit_patch_size = 5
+        self.vit_depth = 3
+        self.vit_num_heads = 12
+
+        self.visual_encoder = VisionTransformer(img_size=self.bev_dim,
+                                                patch_size=self.vit_patch_size,
+                                                embed_dim=self.visual_width,
+                                                depth=self.vit_depth,
+                                                num_heads=self.vit_num_heads,
+                                                use_grad_checkpointing=False,
+                                                ckpt_layer=0,
+                                                drop_path_rate=0)
+        
+        # Text Encoder -----------------------------------------------------------------------------
         encoder_config = BertConfig.from_json_file(med_config)
 
-        encoder_config.encoder_width = self.bev_width
-
-        self.text_encoder = BertModel.from_pretrained('bert-base-uncased',config=encoder_config, add_pooling_layer=False)
+        self.text_encoder = BertModel.from_pretrained('bert-base-uncased', config=encoder_config, add_pooling_layer=False)
         self.text_encoder.resize_token_embeddings(len(self.tokenizer)) 
+        self.text_width = self.text_encoder.config.hidden_size
 
-        # FC layer to map BEV feature size to cross attention width
-        # self.bev_mapper = nn.Linear(self.bev_width, 768).to(self.device)
+        # Text Decoder ----------------------------------------------------------------------------
+        decoder_config = BertConfig.from_json_file(med_config) 
 
-        text_width = self.text_encoder.config.hidden_size
+        self.text_decoder = BertLMHeadModel.from_pretrained('bert-base-uncased', config=decoder_config)    
+        self.text_decoder.resize_token_embeddings(len(self.tokenizer)) 
         
-        # self.bev_proj = nn.Linear(768, embed_dim)
-        self.bev_proj = nn.Linear(self.bev_width, embed_dim)
+        tie_encoder_decoder_weights(self.text_encoder,self.text_decoder.bert, '', '/attention')
 
-        self.text_proj = nn.Linear(text_width, embed_dim)
-
-        self.itm_head = nn.Linear(text_width, 2) 
+        # ITM Head ---------------------------------------------------------------------------------
+        self.itm_head = nn.Linear(self.text_width, 2) # (768, 2)
         
-        # create momentum encoders
-              
-        # self.bev_proj_m = nn.Linear(768, embed_dim)
-        self.bev_proj_m = nn.Linear(self.bev_width, embed_dim)
+        # Projectors -------------------------------------------------------------------------------
+        self.embed_dim = embed_dim
 
+        self.visual_proj = nn.Linear(self.visual_width, self.embed_dim) # (768, 256)
+        self.text_proj = nn.Linear(self.text_width, self.embed_dim)     # (768, 256)
+        
+        # Momentum models --------------------------------------------------------------------------
+        self.momentum = momentum
+
+        self.visual_proj_m = nn.Linear(self.bev_dim, self.embed_dim)    # (768, 256)
+        self.text_proj_m = nn.Linear(self.text_width, self.embed_dim)   # (768, 256)
+
+        self.visual_encoder_m = VisionTransformer(img_size=self.bev_dim,
+                                                  patch_size=self.vit_patch_size,
+                                                  embed_dim=self.visual_width,
+                                                  depth=self.vit_depth,
+                                                  num_heads=self.vit_num_heads,
+                                                  use_grad_checkpointing=False,
+                                                  ckpt_layer=0,
+                                                  drop_path_rate=0)
+        
+        
         self.text_encoder_m = BertModel(config=encoder_config, add_pooling_layer=False)      
-        self.text_proj_m = nn.Linear(text_width, embed_dim)
         
-        self.model_pairs = [[self.bev_proj,self.bev_proj_m],
+        self.model_pairs = [[self.visual_encoder,self.visual_encoder_m],
+                            [self.visual_proj,self.visual_proj_m],
                             [self.text_encoder,self.text_encoder_m],
                             [self.text_proj,self.text_proj_m],
                            ]       
         self.copy_params()
 
-        # create the queue
-        self.register_buffer("bev_queue", torch.randn(embed_dim, queue_size))
-        self.register_buffer("text_queue", torch.randn(embed_dim, queue_size))
+        # Queues -----------------------------------------------------------------------------------
+        self.queue_size = queue_size
+
+        self.register_buffer("bev_queue", torch.randn(self.embed_dim , self.queue_size))
+        self.register_buffer("text_queue", torch.randn(self.embed_dim , self.queue_size))
         self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))  
 
         self.bev_queue = nn.functional.normalize(self.bev_queue, dim=0)
         self.text_queue = nn.functional.normalize(self.text_queue, dim=0)
         
-        self.queue_size = queue_size
-        self.momentum = momentum
-        self.temp = nn.Parameter(0.07*torch.ones([]))   
-        
-        # create the decoder
-        decoder_config = BertConfig.from_json_file(med_config) 
+        # BLIP Checkpoint ---------------------------------------------------------------------------
+        self.load_blip_ckpt(blip_ckpt)
 
-        decoder_config.encoder_width = self.bev_width
-
-        self.text_decoder = BertLMHeadModel.from_pretrained('bert-base-uncased',config=decoder_config)    
-        self.text_decoder.resize_token_embeddings(len(self.tokenizer)) 
-        tie_encoder_decoder_weights(self.text_encoder,self.text_decoder.bert,'','/attention')
-
-        # self.load_blip_ckpt(blip_ckpt)
-
-        # Prompt
+        # Prompt ------------------------------------------------------------------------------------
         self.prompt = ''
         self.prompt_length = len(self.tokenizer(self.prompt).input_ids) - 1
         
 
-    def forward(self, bev_embeds, caption, alpha):
+    def forward(self, bev, caption, alpha):
         with torch.no_grad():
             self.temp.clamp_(0.001,0.5)
         
-        # bev_embeds = self.bev_mapper(bev_embeds)
+        bev_embeds = self.visual_encoder(bev) # (50*50, 256) >>> (10*10, 768)
 
         bev_atts = torch.ones(bev_embeds.size()[:-1],dtype=torch.long).to(self.device)        
-        bev_feat = F.normalize(self.bev_proj(bev_embeds[:,0,:]),dim=-1)          
+        bev_feat = F.normalize(self.visual_proj(bev_embeds[:,0,:]), dim=-1)          
         
-        text = self.tokenizer(caption, padding='max_length', truncation=True, max_length=30, 
-                              return_tensors="pt").to(self.device)  
-        text_output = self.text_encoder(text.input_ids, attention_mask = text.attention_mask,                      
-                                        return_dict = True, mode = 'text')            
+        text = self.tokenizer(caption, padding='max_length', truncation=True, max_length=70, return_tensors="pt").to(self.device)  
+        text_output = self.text_encoder(text.input_ids, attention_mask = text.attention_mask, return_dict = True, mode = 'text')            
         text_feat = F.normalize(self.text_proj(text_output.last_hidden_state[:,0,:]),dim=-1)                 
              
         # get momentum features
         with torch.no_grad():
             self._momentum_update()
-            bev_embeds_m = bev_embeds.clone()
-            bev_feat_m = F.normalize(self.bev_proj_m(bev_embeds_m[:,0,:]),dim=-1)  
-            bev_feat_all = torch.cat([bev_feat_m.t(),self.bev_queue.clone().detach()],dim=1)                   
+            bev_embeds_m = self.visual_encoder_m(bev)
+            bev_feat_m = F.normalize(self.visual_proj_m(bev_embeds_m[:,0,:]), dim=-1)  
+            bev_feat_all = torch.cat([bev_feat_m.t(),self.bev_queue.clone().detach()], dim=1)                   
             
-            text_output_m = self.text_encoder_m(text.input_ids, attention_mask = text.attention_mask,                      
-                                                return_dict = True, mode = 'text')    
-            text_feat_m = F.normalize(self.text_proj_m(text_output_m.last_hidden_state[:,0,:]),dim=-1) 
-            text_feat_all = torch.cat([text_feat_m.t(),self.text_queue.clone().detach()],dim=1)
+            text_output_m = self.text_encoder_m(text.input_ids, attention_mask = text.attention_mask, return_dict = True, mode = 'text')    
+            text_feat_m = F.normalize(self.text_proj_m(text_output_m.last_hidden_state[:,0,:]), dim=-1) 
+            text_feat_all = torch.cat([text_feat_m.t(),self.text_queue.clone().detach()], dim=1)
 
             sim_i2t_m = bev_feat_m @ text_feat_all / self.temp  
             sim_t2i_m = text_feat_m @ bev_feat_all / self.temp 
@@ -134,11 +166,11 @@ class BLIP_BEV_Pretrain(nn.Module):
 
         self._dequeue_and_enqueue(bev_feat_m, text_feat_m)        
 
-        ###============== bev-text Matching ===================###
+        ###============== BEV-Text Matching ===================###
         encoder_input_ids = text.input_ids.clone()
         encoder_input_ids[:,0] = self.tokenizer.enc_token_id
         
-        # forward the positve bev-text pair
+        # forward the positve BEV-text pair
         bs = bev_embeds.size(0)
         output_pos = self.text_encoder(encoder_input_ids,
                                        attention_mask = text.attention_mask,
@@ -152,14 +184,14 @@ class BLIP_BEV_Pretrain(nn.Module):
             weights_i2t = F.softmax(sim_i2t[:,:bs],dim=1)+1e-4  
             weights_i2t.fill_diagonal_(0)   
             
-        # select a negative bev for each text
+        # select a negative BEV for each text
         bev_embeds_neg = []    
         for b in range(bs):
             neg_idx = torch.multinomial(weights_t2i[b], 1).item()
             bev_embeds_neg.append(bev_embeds[neg_idx])
         bev_embeds_neg = torch.stack(bev_embeds_neg,dim=0)   
 
-        # select a negative text for each bev
+        # select a negative text for each BEV
         text_ids_neg = []
         text_atts_neg = []
         for b in range(bs):
@@ -183,11 +215,10 @@ class BLIP_BEV_Pretrain(nn.Module):
                                        return_dict = True,
                                       )                            
 
-        vl_embeddings = torch.cat([output_pos.last_hidden_state[:,0,:], output_neg.last_hidden_state[:,0,:]],dim=0)
+        vl_embeddings = torch.cat([output_pos.last_hidden_state[:,0,:], output_neg.last_hidden_state[:,0,:]], dim=0)
         vl_output = self.itm_head(vl_embeddings)            
 
-        itm_labels = torch.cat([torch.ones(bs,dtype=torch.long),torch.zeros(2*bs,dtype=torch.long)],
-                               dim=0).to(self.device)
+        itm_labels = torch.cat([torch.ones(bs,dtype=torch.long),torch.zeros(2*bs,dtype=torch.long)], dim=0).to(self.device)
         loss_itm = F.cross_entropy(vl_output, itm_labels)  
         
         ##================= LM ========================##     
@@ -208,13 +239,13 @@ class BLIP_BEV_Pretrain(nn.Module):
  
     def generate(
         self,
-        bev_embeds,
-        max_length=30,
+        bev,
+        max_length=70,
         min_length=10,
         top_p=0.9,
     ):
-        bs = bev_embeds.size(0)
-        # bev_embeds = self.bev_mapper(bev_embeds)
+        bs = bev.size(0)
+        bev_embeds = self.visual_encoder(bev)
 
         bev_atts = torch.ones(bev_embeds.size()[:-1], dtype=torch.long).to(self.device)
         model_kwargs = {
