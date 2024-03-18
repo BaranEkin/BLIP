@@ -154,10 +154,10 @@ def main(args, config):
     global_rank = utils.get_rank()        
 
     train_sampler = create_sampler([train_dataset], [True], num_tasks, global_rank)        
-    # val_sampler = create_sampler([val_dataset], [True], num_tasks, global_rank)  
+    val_sampler = create_sampler([val_dataset], [True], num_tasks, global_rank)  
 
     train_loader = create_loader([train_dataset],train_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
-    # val_loader = create_loader([val_dataset],val_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
+    val_loader = create_loader([val_dataset],val_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
 
     #### Model #### 
     model = BLIP_BEV_Pretrain(queue_size=config['queue_size'])
@@ -165,7 +165,7 @@ def main(args, config):
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
     
-    run_name = "Ex4_bs2_qs8_lr_2e-5_no_ckpt_256"
+    run_name = "Ex5_bs5_qs100_lr_2e-5_vit3_768"
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
     
@@ -186,7 +186,7 @@ def main(args, config):
             step_lr_schedule(optimizer, epoch, config['init_lr'], config['min_lr'], config['lr_decay_rate'])
                     
             train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000) 
-            # val_stats = validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
+            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
 
             if utils.is_main_process():  
                 log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},

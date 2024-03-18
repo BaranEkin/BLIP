@@ -47,14 +47,15 @@ class BLIP_BEV_Pretrain(nn.Module):
         self.vit_depth = 3
         self.vit_num_heads = 12
 
-        self.visual_encoder = VisionTransformer(img_size=self.bev_dim,
-                                                patch_size=self.vit_patch_size,
-                                                embed_dim=self.visual_width,
-                                                depth=self.vit_depth,
-                                                num_heads=self.vit_num_heads,
-                                                use_grad_checkpointing=False,
-                                                ckpt_layer=0,
-                                                drop_path_rate=0)
+        self.vis_encoder = VisionTransformer(img_size=self.bev_size,
+                                             patch_size=self.vit_patch_size,
+                                             in_chans=self.bev_dim,
+                                             embed_dim=self.visual_width,
+                                             depth=self.vit_depth,
+                                             num_heads=self.vit_num_heads,
+                                             use_grad_checkpointing=False,
+                                             ckpt_layer=0,
+                                             drop_path_rate=0)
         
         # Text Encoder -----------------------------------------------------------------------------
         encoder_config = BertConfig.from_json_file(med_config)
@@ -77,29 +78,30 @@ class BLIP_BEV_Pretrain(nn.Module):
         # Projectors -------------------------------------------------------------------------------
         self.embed_dim = embed_dim
 
-        self.visual_proj = nn.Linear(self.visual_width, self.embed_dim) # (768, 256)
+        self.vis_proj = nn.Linear(self.visual_width, self.embed_dim) # (768, 256)
         self.text_proj = nn.Linear(self.text_width, self.embed_dim)     # (768, 256)
         
         # Momentum models --------------------------------------------------------------------------
         self.momentum = momentum
 
-        self.visual_proj_m = nn.Linear(self.bev_dim, self.embed_dim)    # (768, 256)
+        self.vis_proj_m = nn.Linear(self.visual_width, self.embed_dim)    # (768, 256)
         self.text_proj_m = nn.Linear(self.text_width, self.embed_dim)   # (768, 256)
 
-        self.visual_encoder_m = VisionTransformer(img_size=self.bev_dim,
-                                                  patch_size=self.vit_patch_size,
-                                                  embed_dim=self.visual_width,
-                                                  depth=self.vit_depth,
-                                                  num_heads=self.vit_num_heads,
-                                                  use_grad_checkpointing=False,
-                                                  ckpt_layer=0,
-                                                  drop_path_rate=0)
+        self.vis_encoder_m = VisionTransformer(img_size=self.bev_size,
+                                               in_chans=self.bev_dim,
+                                               patch_size=self.vit_patch_size,
+                                               embed_dim=self.visual_width,
+                                               depth=self.vit_depth,
+                                               num_heads=self.vit_num_heads,
+                                               use_grad_checkpointing=False,
+                                               ckpt_layer=0,
+                                               drop_path_rate=0)
         
         
         self.text_encoder_m = BertModel(config=encoder_config, add_pooling_layer=False)      
         
-        self.model_pairs = [[self.visual_encoder,self.visual_encoder_m],
-                            [self.visual_proj,self.visual_proj_m],
+        self.model_pairs = [[self.vis_encoder,self.vis_encoder_m],
+                            [self.vis_proj,self.vis_proj_m],
                             [self.text_encoder,self.text_encoder_m],
                             [self.text_proj,self.text_proj_m],
                            ]       
@@ -127,10 +129,10 @@ class BLIP_BEV_Pretrain(nn.Module):
         with torch.no_grad():
             self.temp.clamp_(0.001,0.5)
         
-        bev_embeds = self.visual_encoder(bev) # (50*50, 256) >>> (10*10, 768)
+        bev_embeds = self.vis_encoder(bev.view(-1, self.bev_size, self.bev_size, self.bev_dim).permute(0, 3, 1, 2)) 
 
         bev_atts = torch.ones(bev_embeds.size()[:-1],dtype=torch.long).to(self.device)        
-        bev_feat = F.normalize(self.visual_proj(bev_embeds[:,0,:]), dim=-1)          
+        bev_feat = F.normalize(self.vis_proj(bev_embeds[:,0,:]), dim=-1)          
         
         text = self.tokenizer(caption, padding='max_length', truncation=True, max_length=70, return_tensors="pt").to(self.device)  
         text_output = self.text_encoder(text.input_ids, attention_mask = text.attention_mask, return_dict = True, mode = 'text')            
@@ -139,8 +141,8 @@ class BLIP_BEV_Pretrain(nn.Module):
         # get momentum features
         with torch.no_grad():
             self._momentum_update()
-            bev_embeds_m = self.visual_encoder_m(bev)
-            bev_feat_m = F.normalize(self.visual_proj_m(bev_embeds_m[:,0,:]), dim=-1)  
+            bev_embeds_m = self.vis_encoder_m(bev.view(-1, self.bev_size, self.bev_size, self.bev_dim).permute(0, 3, 1, 2)) 
+            bev_feat_m = F.normalize(self.vis_proj_m(bev_embeds_m[:,0,:]), dim=-1)  
             bev_feat_all = torch.cat([bev_feat_m.t(),self.bev_queue.clone().detach()], dim=1)                   
             
             text_output_m = self.text_encoder_m(text.input_ids, attention_mask = text.attention_mask, return_dict = True, mode = 'text')    
@@ -245,7 +247,7 @@ class BLIP_BEV_Pretrain(nn.Module):
         top_p=0.9,
     ):
         bs = bev.size(0)
-        bev_embeds = self.visual_encoder(bev)
+        bev_embeds = self.vis_encoder(bev.view(-1, self.bev_size, self.bev_size, self.bev_dim).permute(0, 3, 1, 2)) 
 
         bev_atts = torch.ones(bev_embeds.size()[:-1], dtype=torch.long).to(self.device)
         model_kwargs = {
@@ -321,6 +323,7 @@ class BLIP_BEV_Pretrain(nn.Module):
         del ckpt_dict["text_queue"]
         self_dict.update(ckpt_dict)
         self.load_state_dict(self_dict)
+        print(f"BLIP checkpoint loaded from: {ckpt_path}")
 
 @torch.no_grad()
 def concat_all_gather(tensor):
