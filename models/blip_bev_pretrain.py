@@ -59,33 +59,33 @@ class BLIP_BEV_Pretrain(nn.Module):
         
         # Text Encoder -----------------------------------------------------------------------------
         encoder_config = BertConfig.from_json_file(med_config)
-
+        encoder_config.encoder_width = self.visual_width
         self.text_encoder = BertModel.from_pretrained('bert-base-uncased', config=encoder_config, add_pooling_layer=False)
         self.text_encoder.resize_token_embeddings(len(self.tokenizer)) 
         self.text_width = self.text_encoder.config.hidden_size
 
         # Text Decoder ----------------------------------------------------------------------------
         decoder_config = BertConfig.from_json_file(med_config) 
-
+        decoder_config.encoder_width = self.visual_width
         self.text_decoder = BertLMHeadModel.from_pretrained('bert-base-uncased', config=decoder_config)    
         self.text_decoder.resize_token_embeddings(len(self.tokenizer)) 
         
         tie_encoder_decoder_weights(self.text_encoder,self.text_decoder.bert, '', '/attention')
 
         # ITM Head ---------------------------------------------------------------------------------
-        self.itm_head = nn.Linear(self.text_width, 2) # (768, 2)
+        self.itm_head = nn.Linear(self.text_width, 2) 
         
         # Projectors -------------------------------------------------------------------------------
         self.embed_dim = embed_dim
 
-        self.vis_proj = nn.Linear(self.visual_width, self.embed_dim) # (768, 256)
-        self.text_proj = nn.Linear(self.text_width, self.embed_dim)     # (768, 256)
+        self.vis_proj = nn.Linear(self.visual_width, self.embed_dim) 
+        self.text_proj = nn.Linear(self.text_width, self.embed_dim)     
         
         # Momentum models --------------------------------------------------------------------------
         self.momentum = momentum
 
-        self.vis_proj_m = nn.Linear(self.visual_width, self.embed_dim)    # (768, 256)
-        self.text_proj_m = nn.Linear(self.text_width, self.embed_dim)   # (768, 256)
+        self.vis_proj_m = nn.Linear(self.visual_width, self.embed_dim)    
+        self.text_proj_m = nn.Linear(self.text_width, self.embed_dim)   
 
         self.vis_encoder_m = VisionTransformer(img_size=self.bev_size,
                                                in_chans=self.bev_dim,

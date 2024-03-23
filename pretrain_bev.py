@@ -83,19 +83,12 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
     return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}  
 
 def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_freq):
-    
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
-    metric_logger.add_meter('loss_ita', utils.SmoothedValue(window_size=50, fmt='{value:.4f}'))
-    metric_logger.add_meter('loss_itm', utils.SmoothedValue(window_size=50, fmt='{value:.4f}'))    
-    metric_logger.add_meter('loss_lm', utils.SmoothedValue(window_size=50, fmt='{value:.4f}'))
 
-    header = 'Validation Epoch: [{}]'.format(epoch)
-    print_freq = 50   
+    print("\nRunning validation...\n")
 
     model.eval()
     with torch.no_grad():
-        for i, (bev, statement) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+        for i, (bev, statement) in enumerate(data_loader):
 
             bev = bev.to(device,non_blocking=True)
 
@@ -104,10 +97,6 @@ def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_f
             
             loss_ita, loss_itm, loss_lm = model(bev, statement, alpha)  
             loss = loss_ita + loss_itm + loss_lm  
-
-            metric_logger.update(loss_ita=loss_ita.item())
-            metric_logger.update(loss_itm=loss_itm.item())
-            metric_logger.update(loss_lm=loss_lm.item())
 
             global_step = epoch * len(data_loader) + i
 
@@ -120,10 +109,6 @@ def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_f
                 generate(model, bev, statement, epoch, i, gen_log)
 
     model.train()
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger.global_avg())     
-    return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}  
 
 def generate(model, bev, statement, ep, step, log_file):
     
@@ -165,7 +150,7 @@ def main(args, config):
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
     
-    run_name = "Ex5_bs5_qs100_lr_2e-5_vit3_768"
+    run_name = "Ex7_bs5_qs200_lr_1e-5_no_ckpt_vit3_10_384"
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
     
@@ -184,9 +169,9 @@ def main(args, config):
         for epoch in range(start_epoch, config['max_epoch']):
             
             step_lr_schedule(optimizer, epoch, config['init_lr'], config['min_lr'], config['lr_decay_rate'])
-                    
-            train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000) 
-            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
+            
+            train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file, gen_freq=500) 
+            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=200)
 
             if utils.is_main_process():  
                 log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
