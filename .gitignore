@@ -1,0 +1,6 @@
+*.pyc
+data_thesis/
+output/
+runs/
+logs/
+ckpts/
