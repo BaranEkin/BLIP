@@ -18,7 +18,6 @@ class LanguageEvaluation:
         # =================================================
         # Set up scorers
         # =================================================
-        print('tokenization...')
         tokenizer = PTBTokenizer()
         gt  = tokenizer.tokenize(gt)
         prediction = tokenizer.tokenize(prediction)
@@ -26,7 +25,6 @@ class LanguageEvaluation:
         # =================================================
         # Set up scorers
         # =================================================
-        print('setting up scorers...')
         scorers = [
             (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
             (Meteor(),"METEOR"),
@@ -39,7 +37,6 @@ class LanguageEvaluation:
         # Compute scores
         # =================================================
         for scorer, method in scorers:
-            print('computing %s score...'%(scorer.method()))
             score, scores = scorer.compute_score(gt, prediction)
             if type(method) == list:
                 for sc, scs, m in zip(score, scores, method):
@@ -52,7 +49,7 @@ class LanguageEvaluation:
 class GPTEvaluation:
     def evaluate(self, prediction, gt):
         
-        """gpt_response = CLIENT.chat.completions.create(
+        gpt_response = CLIENT.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {
@@ -61,24 +58,6 @@ class GPTEvaluation:
                     "Rate my answer based on the correct answer out of 100, with higher scores indicating "
                     "that the answer is closer to the correct answer, and you should be accurate to single digits "
                     "like 62, 78, 41, etc. Only output the number."
-                },
-                {
-                    "role": "user",
-                    "content": f"'This is the correct answer:{gt}, This is my answer:{prediction}'",
-                },
-            ],
-        )"""
-        gpt_response = CLIENT.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an evaluator who rates a given answer based on the correct answer. Your task is to "
-                    "rate the given answer out of 100, with higher scores indicating that the answer is semantically close to "
-                    "the correct answer. Meaning of the answer and provided information within the answer are utterly important while "
-                    "similarity of words or similarity of sentence structures are less important. Evaluate 100 if meaning is same and provided information totally matches."
-                    "Output 0 if the answer is totally unrelated or meaningless. Output your evaluation score "
-                    "accurate to single digits like 62, 78, 41 etc. and state your reasoning in a single sentence."
                 },
                 {
                     "role": "user",
