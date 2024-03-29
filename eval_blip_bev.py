@@ -4,16 +4,20 @@ from pycocoevalcap.meteor.meteor import Meteor
 from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.spice.spice import Spice
+import json
 
 from openai import OpenAI
 CLIENT = OpenAI()
 
 
 class LanguageEvaluation:
-    def __init__(self):
-        self.eval = {}
 
-    def evaluate(self, prediction, gt):
+    @staticmethod
+    def evaluate(prediction, gt):
+        eval = {}
+
+        gt = {"1": [{"caption": gt}]}
+        prediction = {"1": [{"caption": prediction}]}
 
         # =================================================
         # Set up scorers
@@ -40,14 +44,16 @@ class LanguageEvaluation:
             score, scores = scorer.compute_score(gt, prediction)
             if type(method) == list:
                 for sc, scs, m in zip(score, scores, method):
-                    self.eval[m] = sc
+                    eval[m] = sc
             else:
-                self.eval[method] = score
+                eval[method] = score
 
-        return self.eval
+        return eval
 
 class GPTEvaluation:
-    def evaluate(self, prediction, gt):
+    
+    @staticmethod
+    def evaluate(prediction, gt):
         
         gpt_response = CLIENT.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -71,6 +77,7 @@ class GPTEvaluation:
 if __name__ == "__main__":
     g = "The ego vehicle is driving in the rain. It is night time. There are parked cars around."
     preds = {
+    "same": "The ego vehicle is driving in the rain. It is night time. There are parked cars around.",
     "same_but_different" :"The ego vehicle is driving in the night among parked cars. It is raining.",
     "looks_same_but_wrong" : "The ego vehicle is driving in the snow. It is day time. There are parked trucks around.",
     "different" : "The ego vehicle is navigating through an intersection. A padestrian is crossing the road.",
@@ -83,19 +90,9 @@ if __name__ == "__main__":
     for key, val in preds.items():
         print(f"{key}: {gpt.evaluate(val, g)}")"""
 
-    lang = LanguageEvaluation()
+    results = {}
     for key, val in preds.items():
-        data_val = {
-            "1": [
-                {"caption": val}
-            ]
-        }
-        data_g = {
-            "1": [
-                {"caption": g}
-            ]
-        }
-
-        score = lang.evaluate(data_val, data_g)
-        print(f"{key}: {score}")
+        results[key] = LanguageEvaluation.evaluate(val, g).copy()
+    
+    print(json.dumps(results, indent=4))
     
