@@ -5,15 +5,26 @@ from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.spice.spice import Spice
 import json
+import sys
 
 from openai import OpenAI
 CLIENT = OpenAI()
+
+class HiddenPrints:
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
 
 
 class LanguageEvaluation:
 
     @staticmethod
-    def evaluate(prediction, gt):
+    def calculate_scores(prediction, gt):
+        
         eval = {}
 
         gt = {"1": [{"caption": gt}]}
@@ -47,8 +58,16 @@ class LanguageEvaluation:
                     eval[m] = sc
             else:
                 eval[method] = score
-
+        
         return eval
+
+    @staticmethod
+    def evaluate(prediction, gt, verbose=True):
+        if verbose:
+            return LanguageEvaluation.calculate_scores(prediction, gt)
+        else:
+            with HiddenPrints():
+                return LanguageEvaluation.calculate_scores(prediction, gt)
 
 class GPTEvaluation:
     
@@ -57,6 +76,7 @@ class GPTEvaluation:
         
         gpt_response = CLIENT.chat.completions.create(
             model="gpt-3.5-turbo",
+            temperature=0.6,
             messages=[
                 {
                     "role": "system",

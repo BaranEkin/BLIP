@@ -27,6 +27,7 @@ from models.blip_bev_pretrain import BLIP_BEV_Pretrain
 import utils
 from utils import warmup_lr_schedule, step_lr_schedule
 from data import create_dataset, create_sampler, create_loader
+from eval_blip_bev import LanguageEvaluation, GPTEvaluation
 
 def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log, gen_freq):
     # train
@@ -68,14 +69,14 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
 
         global_step = epoch * len(data_loader) + i
 
-        writer.add_scalar("Loss/Train", loss.item(), global_step)
-        writer.add_scalar("LR", optimizer.param_groups[0]["lr"], global_step)
-        writer.add_scalar("Losses/Train/ITA", loss_ita.item(), global_step)
-        writer.add_scalar("Losses/Train/ITM", loss_itm.item(), global_step)
-        writer.add_scalar("Losses/Train/LM", loss_lm.item(), global_step)
+        writer.add_scalar("Train/Loss", loss.item(), global_step)
+        writer.add_scalar("Train/LR", optimizer.param_groups[0]["lr"], global_step)
+        writer.add_scalar("Train/ITA", loss_ita.item(), global_step)
+        writer.add_scalar("Train/ITM", loss_itm.item(), global_step)
+        writer.add_scalar("Train/LM", loss_lm.item(), global_step)
 
         if i % gen_freq == 0:
-            generate(model, bev, statement, epoch, i, gen_log)
+            generate_log_entry(model, bev, statement, epoch, i, gen_log)
         
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -84,38 +85,70 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
 
 def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_freq):
 
-    print("\nRunning validation...\n")
+    print("\nStarting validation...\n")
 
     model.eval()
     with torch.no_grad():
+
+        lang_metrics = {
+            "Bleu_4": 0.0,
+            "METEOR": 0.0,
+            "ROGUE_L": 0.0,
+            "CIDEr": 0.0,
+            "SPICE": 0.0,
+        }
+        gpt_metric = 0.0
+        num_gpt_fail = 0
+        num_samples = len(data_loader)
+
         for i, (bev, statement) in enumerate(data_loader):
+            print(f"\rRunning Validation {i}/{num_samples}", end="")
 
             bev = bev.to(device,non_blocking=True)
+            output = model.generate(bev)
 
-            # ramp up alpha in the first 2 epochs
-            alpha = config['alpha']*min(1,(epoch*len(data_loader)+i)/(2*len(data_loader))) 
+            lang_scores = LanguageEvaluation.evaluate(output[0], statement[0], verbose=False)
+            lang_metrics["Bleu_4"] += float(lang_scores["Bleu_4"])
+            lang_metrics["METEOR"] += float(lang_scores["METEOR"])
+            lang_metrics["ROGUE_L"] += float(lang_scores["ROGUE_L"])
+            lang_metrics["CIDEr"] += float(lang_scores["CIDEr"])
+            lang_metrics["SPICE"] += float(lang_scores["SPICE"])
+
+            try:
+                gpt_score = float(GPTEvaluation.evaluate(output[0], statement[0]))
+            except:
+                gpt_score = 0
+                num_gpt_fail += 1
             
-            loss_ita, loss_itm, loss_lm = model(bev, statement, alpha)  
-            loss = loss_ita + loss_itm + loss_lm  
-
-            global_step = epoch * len(data_loader) + i
-
-            writer.add_scalar("Loss/Val", loss.item(), global_step)
-            writer.add_scalar("Losses/Val/ITA", loss_ita.item(), global_step)
-            writer.add_scalar("Losses/Val/ITM", loss_itm.item(), global_step)
-            writer.add_scalar("Losses/Val/LM", loss_lm.item(), global_step)
+            gpt_metric += gpt_score
 
             if i % gen_freq == 0:
-                generate(model, bev, statement, epoch, i, gen_log)
+                generate_log_entry(model, bev, statement, epoch, i, gen_log)
 
+        
+        # Averaging over epoch
+        for m in lang_metrics:
+            lang_metrics[m] = lang_metrics[m] / num_samples
+        
+        gpt_metric = gpt_metric / min(1, num_samples- num_gpt_fail)
+
+        writer.add_scalar("Val/GPT", gpt_metric, epoch)
+        writer.add_scalar("Val/BLEU-4", lang_metrics["Bleu_4"], epoch)
+        writer.add_scalar("Val/METEOR", lang_metrics["METEOR"], epoch)
+        writer.add_scalar("Val/ROGUE-L", lang_metrics["ROGUE_L"], epoch)
+        writer.add_scalar("Val/CIDEr", lang_metrics["CIDEr"], epoch)
+        writer.add_scalar("Val/SPICE", lang_metrics["SPICE"], epoch)
+        
+        print("GPT fails during validation:", num_gpt_fail)
+        print("\nValidation complete!\n")
+    
     model.train()
 
-def generate(model, bev, statement, ep, step, log_file):
-    
+def generate_log_entry(model, bev, statement, ep, step, log_file):
     output = model.generate(bev)
     print(f"\nEpoch: {ep}, Step: {step}", file=log_file, flush=True)
-    print(f"GT:  {statement}", file=log_file, flush=True)
-    print(f"Out: {output}", file=log_file, flush=True)
+    print(f"GT:  {statement[0]}", file=log_file, flush=True)
+    print(f"Out: {output[0]}", file=log_file, flush=True)
 
 def main(args, config):
     utils.init_distributed_mode(args)    
@@ -142,7 +175,7 @@ def main(args, config):
     val_sampler = create_sampler([val_dataset], [True], num_tasks, global_rank)  
 
     train_loader = create_loader([train_dataset],train_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
-    val_loader = create_loader([val_dataset],val_sampler,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
+    val_loader = create_loader([val_dataset],val_sampler,batch_size=[1], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
 
     #### Model #### 
     model = BLIP_BEV_Pretrain(queue_size=config['queue_size'])

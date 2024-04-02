@@ -12,11 +12,11 @@ alpha: 0.4
 
 # optimizer
 weight_decay: 0.05
-init_lr: 0.00001
+init_lr: 0.00002
 min_lr: 0.000001
 warmup_lr: 0.000001
 lr_decay_rate: 0.9
-max_epoch: 20
+max_epoch: 50
 warmup_steps: 3000
 
 
