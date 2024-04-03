@@ -1,29 +1,20 @@
-from pycocoevalcap.tokenizer.ptbtokenizer import PTBTokenizer
+import json
+import time
+
 from pycocoevalcap.bleu.bleu import Bleu
 from pycocoevalcap.meteor.meteor import Meteor
 from pycocoevalcap.rouge.rouge import Rouge
 from pycocoevalcap.cider.cider import Cider
 from pycocoevalcap.spice.spice import Spice
-import json
-import sys
 
 from openai import OpenAI
 CLIENT = OpenAI()
-
-class HiddenPrints:
-    def __enter__(self):
-        self._original_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        sys.stdout.close()
-        sys.stdout = self._original_stdout
 
 
 class LanguageEvaluation:
 
     @staticmethod
-    def calculate_scores(prediction, gt):
+    def evaluate(prediction, gt, tokenizer):
         
         eval = {}
 
@@ -33,47 +24,43 @@ class LanguageEvaluation:
         # =================================================
         # Set up scorers
         # =================================================
-        tokenizer = PTBTokenizer()
+        start_time = time.time()
         gt  = tokenizer.tokenize(gt)
         prediction = tokenizer.tokenize(prediction)
+        print(f"____Tokenizer took {str(time.time() - start_time)} seconds.____")
 
         # =================================================
         # Set up scorers
         # =================================================
         scorers = [
             (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
-            (Meteor(),"METEOR"),
+            # (Meteor(),"METEOR"),
             (Rouge(), "ROUGE_L"),
-            (Cider(), "CIDEr"),
-            (Spice(), "SPICE")
+            (Cider(), "CIDEr")
+            # (Spice(), "SPICE")
         ]
 
         # =================================================
         # Compute scores
         # =================================================
         for scorer, method in scorers:
+            start_time = time.time()
             score, scores = scorer.compute_score(gt, prediction)
             if type(method) == list:
                 for sc, scs, m in zip(score, scores, method):
                     eval[m] = sc
             else:
                 eval[method] = score
+
+            print(f"____{method} took {str(time.time() - start_time)} seconds.____")
         
         return eval
-
-    @staticmethod
-    def evaluate(prediction, gt, verbose=True):
-        if verbose:
-            return LanguageEvaluation.calculate_scores(prediction, gt)
-        else:
-            with HiddenPrints():
-                return LanguageEvaluation.calculate_scores(prediction, gt)
 
 class GPTEvaluation:
     
     @staticmethod
     def evaluate(prediction, gt):
-        
+        start_time = time.time()
         gpt_response = CLIENT.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0.6,
@@ -91,6 +78,7 @@ class GPTEvaluation:
                 },
             ],
         )
+        print(f"____GPT took {str(time.time() - start_time)} seconds.____")
         return gpt_response.choices[0].message.content
     
 

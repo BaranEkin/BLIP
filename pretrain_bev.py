@@ -23,6 +23,8 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from pycocoevalcap.tokenizer.ptbtokenizer import PTBTokenizer
+
 from models.blip_bev_pretrain import BLIP_BEV_Pretrain
 import utils
 from utils import warmup_lr_schedule, step_lr_schedule
@@ -83,37 +85,44 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
     print("Averaged stats:", metric_logger.global_avg())     
     return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}  
 
-def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_freq):
+def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_freq, num_samples_limit=600):
 
-    print("\nStarting validation...\n")
-
+    print(f"\n[EPOCH: {epoch}] Starting validation...\n")
+    ptb_tokenizer = PTBTokenizer()
     model.eval()
     with torch.no_grad():
 
         lang_metrics = {
             "Bleu_4": 0.0,
-            "METEOR": 0.0,
-            "ROGUE_L": 0.0,
+            # "METEOR": 0.0,
+            "ROUGE_L": 0.0,
             "CIDEr": 0.0,
-            "SPICE": 0.0,
+            # "SPICE": 0.0,
         }
         gpt_metric = 0.0
         num_gpt_fail = 0
-        num_samples = len(data_loader)
+        num_lang_fail = 0
+
 
         for i, (bev, statement) in enumerate(data_loader):
-            print(f"\rRunning Validation {i}/{num_samples}", end="")
+
+            if i > num_samples_limit:
+                 break
+
+            print(f"\nRunning Validation {i}/{num_samples_limit}\n")
 
             bev = bev.to(device,non_blocking=True)
             output = model.generate(bev)
-
-            lang_scores = LanguageEvaluation.evaluate(output[0], statement[0], verbose=False)
-            lang_metrics["Bleu_4"] += float(lang_scores["Bleu_4"])
-            lang_metrics["METEOR"] += float(lang_scores["METEOR"])
-            lang_metrics["ROGUE_L"] += float(lang_scores["ROGUE_L"])
-            lang_metrics["CIDEr"] += float(lang_scores["CIDEr"])
-            lang_metrics["SPICE"] += float(lang_scores["SPICE"])
-
+            try:
+                lang_scores = LanguageEvaluation.evaluate(output[0], statement[0], tokenizer=ptb_tokenizer)
+                lang_metrics["Bleu_4"] += float(lang_scores["Bleu_4"])
+                # lang_metrics["METEOR"] += float(lang_scores["METEOR"])
+                lang_metrics["ROUGE_L"] += float(lang_scores["ROUGE_L"])
+                lang_metrics["CIDEr"] += float(lang_scores["CIDEr"])
+                # lang_metrics["SPICE"] += float(lang_scores["SPICE"])
+            except:
+                num_lang_fail += 1
+            
             try:
                 gpt_score = float(GPTEvaluation.evaluate(output[0], statement[0]))
             except:
@@ -125,22 +134,21 @@ def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_f
             if i % gen_freq == 0:
                 generate_log_entry(model, bev, statement, epoch, i, gen_log)
 
-        
         # Averaging over epoch
         for m in lang_metrics:
-            lang_metrics[m] = lang_metrics[m] / num_samples
+            lang_metrics[m] = lang_metrics[m] / max(1, num_samples_limit - num_lang_fail)
         
-        gpt_metric = gpt_metric / min(1, num_samples- num_gpt_fail)
+        gpt_metric = gpt_metric / max(1, num_samples_limit - num_gpt_fail)
 
         writer.add_scalar("Val/GPT", gpt_metric, epoch)
         writer.add_scalar("Val/BLEU-4", lang_metrics["Bleu_4"], epoch)
-        writer.add_scalar("Val/METEOR", lang_metrics["METEOR"], epoch)
-        writer.add_scalar("Val/ROGUE-L", lang_metrics["ROGUE_L"], epoch)
+        # writer.add_scalar("Val/METEOR", lang_metrics["METEOR"], epoch)
+        writer.add_scalar("Val/ROUGE-L", lang_metrics["ROUGE_L"], epoch)
         writer.add_scalar("Val/CIDEr", lang_metrics["CIDEr"], epoch)
-        writer.add_scalar("Val/SPICE", lang_metrics["SPICE"], epoch)
+        # writer.add_scalar("Val/SPICE", lang_metrics["SPICE"], epoch)
         
         print("GPT fails during validation:", num_gpt_fail)
-        print("\nValidation complete!\n")
+        print("\n[EPOCH: {epoch}] Validation complete!\n")
     
     model.train()
 
@@ -183,7 +191,7 @@ def main(args, config):
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
     
-    run_name = "Ex7_bs5_qs200_lr_1e-5_no_ckpt_vit3_10_384"
+    run_name = "Ex8_bs5_qs100_lr_2e-5_vit3_10_768"
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
     
@@ -195,8 +203,8 @@ def main(args, config):
         model_without_ddp = model.module 
     """   
 
-    with open(f"./logs/log_{todays_date}_{run_name}.txt", "w") as gen_log_file:    
-        
+    with open(f"./logs/log_{todays_date}_{run_name}.txt", "w") as gen_log_file:
+         
         print("Start training")
         start_time = time.time()    
         for epoch in range(start_epoch, config['max_epoch']):
@@ -204,7 +212,7 @@ def main(args, config):
             step_lr_schedule(optimizer, epoch, config['init_lr'], config['min_lr'], config['lr_decay_rate'])
             
             train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file, gen_freq=500) 
-            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=200)
+            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
 
             if utils.is_main_process():  
                 log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
