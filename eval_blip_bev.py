@@ -1,5 +1,4 @@
 import json
-import time
 
 from pycocoevalcap.bleu.bleu import Bleu
 from pycocoevalcap.meteor.meteor import Meteor
@@ -14,20 +13,22 @@ CLIENT = OpenAI()
 class LanguageEvaluation:
 
     @staticmethod
-    def evaluate(prediction, gt, tokenizer):
+    def evaluate(predictions, gts):
         
         eval = {}
-
-        gt = {"1": [{"caption": gt}]}
-        prediction = {"1": [{"caption": prediction}]}
+        gt = {}
+        prediction = {}
+        for i in range(len(predictions)):
+            gt[str(i)] = [gts[i].lower()]
+            prediction[str(i)] = [predictions[i].lower()]
 
         # =================================================
         # Set up scorers
         # =================================================
-        start_time = time.time()
-        gt  = tokenizer.tokenize(gt)
-        prediction = tokenizer.tokenize(prediction)
-        print(f"____Tokenizer took {str(time.time() - start_time)} seconds.____")
+        # start_time = time.time()
+        # gt  = tokenizer.tokenize(gt)
+        # prediction = tokenizer.tokenize(prediction)
+        # print(f"____Tokenizer took {str(time.time() - start_time)} seconds.____")
 
         # =================================================
         # Set up scorers
@@ -44,15 +45,12 @@ class LanguageEvaluation:
         # Compute scores
         # =================================================
         for scorer, method in scorers:
-            start_time = time.time()
             score, scores = scorer.compute_score(gt, prediction)
             if type(method) == list:
                 for sc, scs, m in zip(score, scores, method):
                     eval[m] = sc
             else:
                 eval[method] = score
-
-            print(f"____{method} took {str(time.time() - start_time)} seconds.____")
         
         return eval
 
@@ -60,7 +58,6 @@ class GPTEvaluation:
     
     @staticmethod
     def evaluate(prediction, gt):
-        start_time = time.time()
         gpt_response = CLIENT.chat.completions.create(
             model="gpt-3.5-turbo",
             temperature=0.6,
@@ -78,29 +75,25 @@ class GPTEvaluation:
                 },
             ],
         )
-        print(f"____GPT took {str(time.time() - start_time)} seconds.____")
         return gpt_response.choices[0].message.content
     
 
 if __name__ == "__main__":
     g = "The ego vehicle is driving in the rain. It is night time. There are parked cars around."
     preds = {
-    "same": "The ego vehicle is driving in the rain. It is night time. There are parked cars around.",
-    "same_but_different" :"The ego vehicle is driving in the night among parked cars. It is raining.",
-    "looks_same_but_wrong" : "The ego vehicle is driving in the snow. It is day time. There are parked trucks around.",
-    "different" : "The ego vehicle is navigating through an intersection. A padestrian is crossing the road.",
-    "unrelated" : "A baby is crying, waking her mother in the middle of the night.",
-    "nonesense_traffic" : "The the the the ego ego the the the the the it ego the ego the ego the ego ego ego the it.",
-    "nonesense_unrelated" : "Random monkey catch worry sad football issue not prestige tomato help is building."
+    "same": "the ego vehicle is driving in the rain. it is night time. there are parked cars around.",
     }
 
     """gpt = GPTEvaluation()
     for key, val in preds.items():
-        print(f"{key}: {gpt.evaluate(val, g)}")"""
-
+        print(f"{key}: {gpt.evaluate(val, g)}")
+    tk = PTBTokenizer()
     results = {}
     for key, val in preds.items():
-        results[key] = LanguageEvaluation.evaluate(val, g).copy()
+        results[key] = LanguageEvaluation.evaluate(val, g, tokenizer=tk).copy()
+        
+    print(json.dumps(results, indent=4))"""
     
-    print(json.dumps(results, indent=4))
+    results = LanguageEvaluation.evaluate(list(preds.values()), [g] * 1)
+    print(results)
     
