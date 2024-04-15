@@ -40,7 +40,7 @@ class bev_pretrain_dataset(Dataset):
             bev = bev.squeeze()
         
         # Statement -------------------------------------
-        sample_idx = bev_filename[bev_filename.rfind("/")+1:-3]
+        sample_idx = os.path.splitext(os.path.basename(bev_filename))[0]
         scene_token = self.get_scene_token(sample_idx)
         statement = self.get_scene_statement(scene_token)
 
