@@ -29,7 +29,7 @@ from models.blip_bev_pretrain import BLIP_BEV_Pretrain
 import utils
 from utils import warmup_lr_schedule, step_lr_schedule
 from data import create_dataset, create_sampler, create_loader
-from eval_blip_bev import LanguageEvaluation, GPTEvaluation
+from eval_blip_bev import LanguageEvaluation #, GPTEvaluation
 
 
 def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log, gen_freq):
@@ -50,7 +50,7 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
 
     for i, (bev, statement) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
-        if epoch == 0:
+        if epoch == 1:
             warmup_lr_schedule(optimizer, i, config['warmup_steps'], config['warmup_lr'], config['init_lr'])
 
         optimizer.zero_grad()
@@ -80,7 +80,7 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
         writer.add_scalar("Train/LM", loss_lm.item(), global_step)
 
         if i % gen_freq == 0:
-            generate_log_entry(model, bev, statement, epoch, i, gen_log)
+            generate_log_entry(model, bev, statement, epoch, i, gen_log, mode="Train")
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -142,7 +142,7 @@ def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_f
             """
 
             if i % gen_freq == 0:
-                generate_log_entry(model, bev, statement, epoch, i, gen_log)
+                generate_log_entry(model, bev, statement, epoch, i, gen_log, mode="Val")
 
         # Averaging over epoch
         for m in lang_metrics:
@@ -167,9 +167,9 @@ def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_f
     model.train()
 
 
-def generate_log_entry(model, bev, statement, ep, step, log_file):
+def generate_log_entry(model, bev, statement, ep, step, log_file, mode="Train"):
     output = model.generate(bev)
-    print(f"\nEpoch: {ep}, Step: {step}", file=log_file, flush=True)
+    print(f"\nEpoch: {ep}, Mode: {mode}, Step: {step}", file=log_file, flush=True)
     print(f"GT:  {statement[0]}", file=log_file, flush=True)
     print(f"Out: {output[0]}", file=log_file, flush=True)
 
@@ -204,12 +204,14 @@ def main(args, config):
                                num_workers=[4], is_trains=[True], collate_fns=[None])[0]
 
     #### Model #### 
+    print("Initializing the model...")
     model = BLIP_BEV_Pretrain(queue_size=config['queue_size'])
     model = model.to(device)
+    print("Model initialized.")
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config['init_lr'], weight_decay=config['weight_decay'])
 
-    run_name = "Ex9_bs2_qs20_lr_2e-5_vit3_10_768"
+    run_name = "Ex10_bs10_qs200_lr_5e-6_vit3_10_768"
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
 
@@ -231,7 +233,7 @@ def main(args, config):
     """
 
     with open(f"./logs/log_{todays_date}_{run_name}.txt", "w") as gen_log_file:
-        # validation(model, val_loader, 0, device, config, sum_writer, gen_log_file, gen_freq=1000)
+        # validation(model, val_loader, 0, device, config, sum_writer, gen_log_file, gen_freq=500)
 
         print("Start training")
         start_time = time.time()
@@ -241,8 +243,8 @@ def main(args, config):
             step_lr_schedule(optimizer, epoch, config['init_lr'], config['min_lr'], config['lr_decay_rate'])
 
             train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file,
-                                gen_freq=500)
-            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=1000)
+                                gen_freq=250)
+            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=500)
 
             if utils.is_main_process():
                 log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
@@ -267,7 +269,8 @@ def main(args, config):
 
 
 if __name__ == '__main__':
-    torch.cuda.empty_cache()
+    with torch.no_grad():
+        torch.cuda.empty_cache()
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='./configs/pretrain_bev.yaml')
