@@ -16,7 +16,8 @@ class BLIP_BEV_Pretrain(nn.Module):
                  blip_ckpt='ckpts/model_base_capfilt_large.pth',  
                  bev_size=50, 
                  bev_dim=256,
-                 embed_dim=256,     
+                 embed_dim=256,
+                 visual_width=768,     
                  queue_size=10,
                  momentum=0.995,
                  ):
@@ -42,7 +43,7 @@ class BLIP_BEV_Pretrain(nn.Module):
         self.bev_dim = bev_dim
 
         # Visual Encoder ---------------------------------------------------------------------------
-        self.visual_width = 768
+        self.visual_width = visual_width
         self.vit_patch_size = 5
         self.vit_depth = 3
         self.vit_num_heads = 12
@@ -242,7 +243,7 @@ class BLIP_BEV_Pretrain(nn.Module):
     def generate(
         self,
         bev,
-        max_length=70,
+        max_length=50,
         min_length=10,
         top_p=0.9,
     ):
