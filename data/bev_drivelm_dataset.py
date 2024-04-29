@@ -44,8 +44,5 @@ class bev_drivelm_dataset(Dataset):
             bev = torch.load(bev_file)
             bev = bev.squeeze()
 
-        return {"bev": bev,
-                "q": drivelm_item["question"],
-                "a": drivelm_item["answer"],
-                "q_type": drivelm_item["q_type"]}
+        return bev, drivelm_item["question"], drivelm_item["answer"], drivelm_item["q_type"]
 

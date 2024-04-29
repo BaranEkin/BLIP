@@ -54,7 +54,7 @@ class BLIP_BEV_VQA(nn.Module):
         self.text_decoder = BertLMHeadModel(config=decoder_config)
         self.text_decoder.resize_token_embeddings(len(self.tokenizer))
 
-    def forward(self, bev, question, answer=None):
+    def forward(self, bev, question, answer):
 
         bev_embeds = self.vis_encoder(bev.view(-1, self.bev_size, self.bev_size, self.bev_dim).permute(0, 3, 1, 2))
         bev_atts = torch.ones(bev_embeds.size()[:-1], dtype=torch.long).to(self.device)
