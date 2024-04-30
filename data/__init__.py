@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from torchvision.transforms.functional import InterpolationMode
 
@@ -10,6 +10,7 @@ from data.vqa_dataset import vqa_dataset
 from data.nlvr_dataset import nlvr_dataset
 from data.pretrain_dataset import pretrain_dataset
 from data.bev_pretrain_dataset import bev_pretrain_dataset
+from data.bev_drivelm_dataset import bev_drivelm_dataset
 from transform.randaugment import RandomAugment
 
 def create_dataset(dataset, config, min_scale=0.5):
@@ -17,6 +18,15 @@ def create_dataset(dataset, config, min_scale=0.5):
     if dataset=='pretrain_bev':
         train_dataset = bev_pretrain_dataset(config['bev_features_folder_train'], config['scene_statements'], config['nuscenes_sample'])
         val_dataset = bev_pretrain_dataset(config['bev_features_folder_val'], config['scene_statements'], config['nuscenes_sample'])
+        return train_dataset, val_dataset
+    
+    elif dataset=='bev_drivelm':
+        bev_drivelm = bev_drivelm_dataset(config['bev_features_folder_train'], config['bev_features_folder_val'], config['drivelm_json_train'])
+        train_size = int(0.95 * len(bev_drivelm))
+        test_size = len(bev_drivelm) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(bev_drivelm, [train_size, test_size], 
+                                                                   generator=torch.Generator().manual_seed(42))
+        
         return train_dataset, val_dataset
     
     else:

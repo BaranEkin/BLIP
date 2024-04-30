@@ -61,7 +61,7 @@ class BLIP_BEV_VQA(nn.Module):
 
         bs = bev_embeds.size(0)
 
-        question = self.tokenizer(question, padding='longest', truncation=True, max_length=35, return_tensors="pt").to(
+        question = self.tokenizer(question, padding='longest', truncation=True, max_length=100, return_tensors="pt").to(
             self.device)
         question.input_ids[:, 0] = self.tokenizer.enc_token_id
 
@@ -69,7 +69,7 @@ class BLIP_BEV_VQA(nn.Module):
         n: number of answers for each question
         weights: weight for each answer
         '''
-        answer = self.tokenizer(answer, padding='longest', return_tensors="pt").to(self.device)
+        answer = self.tokenizer(answer, padding='longest', truncation=True, max_length=100, return_tensors="pt").to(self.device)
         answer.input_ids[:, 0] = self.tokenizer.bos_token_id
         answer_targets = answer.input_ids.masked_fill(answer.input_ids == self.tokenizer.pad_token_id, -100)
 
@@ -100,7 +100,7 @@ class BLIP_BEV_VQA(nn.Module):
         loss = answer_output.loss.mean()
         return loss
 
-    def generate(self, bev, question, max_length=50, min_length=10, top_p=0.9):
+    def generate(self, bev, question, max_length=100, min_length=3, top_p=0.9):
 
         bev_embeds = self.vis_encoder(bev.view(-1, self.bev_size, self.bev_size, self.bev_dim).permute(0, 3, 1, 2))
         bev_atts = torch.ones(bev_embeds.size()[:-1], dtype=torch.long).to(self.device)
