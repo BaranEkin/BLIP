@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
-import torch.distributed as dist
+# import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
@@ -249,7 +249,7 @@ def main(args, config):
                 with open(os.path.join(args.output_dir, "log.txt"), "a") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
-            dist.barrier()
+            # dist.barrier()
 
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
