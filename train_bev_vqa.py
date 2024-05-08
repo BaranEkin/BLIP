@@ -194,7 +194,7 @@ def main(args, config):
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
 
-    start_new = True
+    start_new = False
     if start_new:
         # START FROM PRETRAINED WEIGHTS --------------------
         print("Loading pretrained weights...")
@@ -207,7 +207,7 @@ def main(args, config):
     else:
         # CONTINUE FROM CHECKPOINT ----------------------------
         print("Loading previous checkpoint...")
-        checkpoint = torch.load(r"")
+        checkpoint = torch.load(r"/workspace/BLIP/output/BEV_VQA_DriveLM/BLIP_BEV_VQA_DriveLM_bs10_lr5e-6_1.pth")
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_epoch = checkpoint["epoch"] + 1
@@ -221,7 +221,7 @@ def main(args, config):
     """
 
     with open(f"./logs/log_{todays_date}_{run_name}.txt", "w") as gen_log_file:
-        validation(model, val_loader, 0, device, config, sum_writer, gen_log_file, gen_freq=100)
+        # validation(model, val_loader, 0, device, config, sum_writer, gen_log_file, gen_freq=100)
 
         print("Start training")
         start_time = time.time()
