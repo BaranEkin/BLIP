@@ -1,7 +1,7 @@
 import re
 import torch
 import json
-from evaluation import evaluation_suit
+from eval.drivelm.evaluation import evaluation_suit
 
 def format_sentence_for_drivelm(sentence):
     # Function to capitalize the first letter of a sentence and after any '.', '!', or '?'
@@ -40,23 +40,23 @@ def generate_drivelm_output(model, data_loader, epoch, device):
             id_list = []
             out_dicts = []
             for i, (bev, question, answer, _, sample_token, scene_token, _) in enumerate(data_loader):
-                print(f"{i}/{len(data_loader)}")
+                print(f"\r{i}/{len(data_loader)}", end="")
 
                 bev = bev.to(device, non_blocking=True)
                 output = model.generate(bev, question)
-                output = format_sentence_for_drivelm(output)
+                output = format_sentence_for_drivelm(output[0])
 
                 out_dict = {}
-                increment_add_to_dict(id_list, out_dict, f"{scene_token[0]}_{sample_token[0]}", question[0], answer[0], output[0], 0)
+                increment_add_to_dict(id_list, out_dict, f"{scene_token[0]}_{sample_token[0]}", question[0], answer[0], output, 0)
                 out_dicts.append(out_dict)
 
             json.dump(out_dicts, out_json, indent=4)
 
-    print("Output generated!")
+    print("\nOutput generated!")
 
 def increment_add_to_dict(ids, d, id, q, gt_a, a, i):
-    if id in ids:
-        increment_add_to_dict(ids, d, f"{id}_{i+1}", q, gt_a, a, i+1)
+    if f"{id}_{i}" in ids:
+        increment_add_to_dict(ids, d, id, q, gt_a, a, i+1)
     else:
         ids.append(f"{id}_{i}")
         d["id"] = f"{id}_{i}"

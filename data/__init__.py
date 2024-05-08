@@ -24,7 +24,7 @@ def create_dataset(dataset, config, min_scale=0.5):
         bev_drivelm = bev_drivelm_dataset(config['bev_features_folder_train'], config['bev_features_folder_val'], config['drivelm_json_train'])
         val_size = 66
         val_dataset = torch.utils.data.Subset(bev_drivelm, range(val_size))
-        train_dataset = torch.utils.data.Subset(bev_drivelm, range(val_size, bev_drivelm))
+        train_dataset = torch.utils.data.Subset(bev_drivelm, range(val_size, len(bev_drivelm)))
         
         return train_dataset, val_dataset
     

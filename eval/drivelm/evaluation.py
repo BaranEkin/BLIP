@@ -8,7 +8,7 @@ from multiprocessing import Pool
 
 import sys
 sys.path.append(".")
-from gpt_eval import GPTEvaluation
+from eval.drivelm.gpt_eval import GPTEvaluation
 
 
 class evaluation_suit():

@@ -15,7 +15,7 @@ class bev_drivelm_dataset(Dataset):
             self.drivelm_dict = json.load(drivelm_json)
 
         self.drivelm = []
-        for scene in self.drivelm_dict.values():
+        for scene_token, scene in self.drivelm_dict.items():
             for keyframe, keyframe_data in scene["key_frames"].items():
                 for q_type, qs in keyframe_data["QA"].items():
                     for q_dict in qs:
@@ -26,8 +26,8 @@ class bev_drivelm_dataset(Dataset):
                                              "question": question,
                                              "answer": answer,
                                              "q_type": q_type,
-                                             "scene_token": scene,
-                                             "tag": tag})
+                                             "scene_token": scene_token,
+                                             "tag": tag[0]})
 
     def __len__(self):
         return len(self.drivelm)

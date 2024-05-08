@@ -133,7 +133,7 @@ def main(args, config):
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config["init_lr"], weight_decay=config["weight_decay"])
 
-    run_name = "BLIP_BEV_VQA_DriveLM_v2_bs10_lr5e-6"
+    run_name = "BLIP_BEV_VQA_DriveLM_v2_bs1_lr5e-6"
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
 
@@ -150,7 +150,7 @@ def main(args, config):
     else:
         # CONTINUE FROM CHECKPOINT ----------------------------
         print("Loading previous checkpoint...")
-        checkpoint = torch.load(r"/workspace/BLIP/output/BEV_VQA_DriveLM/BLIP_BEV_VQA_DriveLM_bs10_lr5e-6_1.pth")
+        checkpoint = torch.load(r"/workspace/BLIP/ckpts/BLIP_BEV_VQA_DriveLM_bs10_lr5e-6_4.pth")
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_epoch = checkpoint["epoch"] + 1
