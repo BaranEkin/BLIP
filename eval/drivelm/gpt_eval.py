@@ -10,7 +10,7 @@ from openai import OpenAI
 
 class GPTEvaluation:
     def __init__(self):
-        self.client = OpenAI(api_key="put key here")
+        self.client = OpenAI(api_key="key")
 
     def call_chatgpt(self, chatgpt_messages, max_tokens=40, model="gpt-3.5-turbo"):
         response = self.client.chat.completions.create(

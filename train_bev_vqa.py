@@ -22,7 +22,7 @@ from models.blip_bev_vqa import BLIP_BEV_VQA
 import utils
 from utils import warmup_lr_schedule, step_lr_schedule
 from data import create_dataset, create_sampler, create_loader
-from eval_blip_bev import LanguageEvaluation #, GPTEvaluation
+from eval.drivelm.utils import generate_drivelm_output, drivelm_evaluation
 
 
 def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log, gen_freq):
@@ -39,7 +39,7 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
 
     data_loader.sampler.set_epoch(epoch)
 
-    for i, (bev, question, answer, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for i, (bev, question, answer, _, _, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
 
         optimizer.zero_grad()
 
@@ -66,82 +66,26 @@ def train(model, data_loader, optimizer, epoch, device, config, writer, gen_log,
     return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()}
 
 
-def validation(model, data_loader, epoch, device, config, writer, gen_log, gen_freq):
+def validation(model, data_loader, epoch, device, writer):
+
     print(f"\n[EPOCH: {epoch}] Starting validation...\n")
-    ptb_tokenizer = PTBTokenizer()
-    model.eval()
-    with torch.no_grad():
+    generate_drivelm_output(model, data_loader, epoch, device)
+    results = drivelm_evaluation(f"/workspace/BLIP/eval/drivelm/outputs/output_{epoch}.json", 
+                                 "/workspace/BLIP/eval/drivelm/test_eval.json")
+    
+    writer.add_scalar("Val/GPT", results["chatgpt"], epoch)
+    writer.add_scalar("Val/Accuracy", results["accuracy"], epoch)
+    writer.add_scalar("Val/Match", results["match"], epoch)
+    writer.add_scalar("Val/BLEU-1", results["language"]["val/Bleu_1"], epoch)
+    writer.add_scalar("Val/BLEU-2", results["language"]["val/Bleu_2"], epoch)
+    writer.add_scalar("Val/BLEU-3", results["language"]["val/Bleu_3"], epoch)
+    writer.add_scalar("Val/BLEU-4", results["language"]["val/Bleu_4"], epoch)
+    writer.add_scalar("Val/ROUGE-L", results["language"]["val/ROUGE_L"], epoch)
+    writer.add_scalar("Val/CIDEr", results["language"]["val/CIDEr"], epoch)
+    writer.add_scalar("Val/Final_Score", results["final_score"], epoch)
 
-        lang_metrics = {
-            "Bleu_1": 0.0,
-            "Bleu_2": 0.0,
-            "Bleu_3": 0.0,
-            "Bleu_4": 0.0,
-            # "METEOR": 0.0,
-            "ROUGE_L": 0.0,
-            "CIDEr": 0.0,
-            # "SPICE": 0.0,
-        }
 
-        gpt_metric = 0.0
-        num_gpt_fail = 0
-        num_lang_fail = 0
-        num_samples = len(data_loader)
-
-        for i, (bev, question, answer, _) in enumerate(data_loader):
-
-            print(f"\rRunning Validation {i + 1}/{num_samples}", end="")
-            bev = bev.to(device, non_blocking=True)
-            output = model.generate(bev, question)
-
-            # LANGUAGE METRICS CALCULATION
-            try:
-                lang_scores = LanguageEvaluation.evaluate(list(output), list(answer))
-                lang_metrics["Bleu_1"] += float(lang_scores["Bleu_1"])
-                lang_metrics["Bleu_2"] += float(lang_scores["Bleu_2"])
-                lang_metrics["Bleu_3"] += float(lang_scores["Bleu_3"])
-                lang_metrics["Bleu_4"] += float(lang_scores["Bleu_4"])
-                # lang_metrics["METEOR"] += float(lang_scores["METEOR"])
-                lang_metrics["ROUGE_L"] += float(lang_scores["ROUGE_L"])
-                lang_metrics["CIDEr"] += float(lang_scores["CIDEr"])
-                # lang_metrics["SPICE"] += float(lang_scores["SPICE"])
-            except:
-                num_lang_fail += 1
-
-            """
-            # GPT METRIC CALCULATION
-            try:
-                gpt_score = float(GPTEvaluation.evaluate(output[0], statement[0]))
-            except:
-                gpt_score = 0
-                num_gpt_fail += 1
-
-            gpt_metric += gpt_score
-            """
-
-            if i % gen_freq == 0:
-                generate_log_entry(model, bev, question, answer, epoch, i, gen_log, mode="Val")
-
-        # Averaging over epoch
-        for m in lang_metrics:
-            lang_metrics[m] = lang_metrics[m] / max(1, num_samples - num_lang_fail)
-
-        # gpt_metric = gpt_metric / max(1, num_samples- num_gpt_fail)
-
-        # writer.add_scalar("Val/GPT", gpt_metric, epoch)
-        writer.add_scalar("Val/BLEU-1", lang_metrics["Bleu_1"], epoch)
-        writer.add_scalar("Val/BLEU-2", lang_metrics["Bleu_2"], epoch)
-        writer.add_scalar("Val/BLEU-3", lang_metrics["Bleu_3"], epoch)
-        writer.add_scalar("Val/BLEU-4", lang_metrics["Bleu_4"], epoch)
-        # writer.add_scalar("Val/METEOR", lang_metrics["METEOR"], epoch)
-        writer.add_scalar("Val/ROUGE-L", lang_metrics["ROUGE_L"], epoch)
-        writer.add_scalar("Val/CIDEr", lang_metrics["CIDEr"], epoch)
-        # writer.add_scalar("Val/SPICE", lang_metrics["SPICE"], epoch)
-
-        # print("GPT metric fails during validation:", num_gpt_fail)
-        print("\nLanguage metric fails during validation:", num_lang_fail)
-        print("\n[EPOCH: {epoch}] Validation complete!\n")
-
+    print(f"\n[EPOCH: {epoch}] Validation complete!\n")
     model.train()
 
 
@@ -179,8 +123,7 @@ def main(args, config):
 
     train_loader = create_loader([train_dataset], train_sampler, batch_size=[config["batch_size"]],
                                  num_workers=[4], is_trains=[True], collate_fns=[None])[0]
-    val_loader = create_loader([val_dataset], val_sampler, batch_size=[config["batch_size"]],
-                               num_workers=[4], is_trains=[True], collate_fns=[None])[0]
+    val_loader = create_loader([val_dataset], val_sampler, batch_size=[1], num_workers=[4], is_trains=[True], collate_fns=[None])[0]
 
     #### Model ####
     print("Initializing the model...")
@@ -190,16 +133,16 @@ def main(args, config):
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=config["init_lr"], weight_decay=config["weight_decay"])
 
-    run_name = "BLIP_BEV_VQA_DriveLM_bs10_lr5e-6"
+    run_name = "BLIP_BEV_VQA_DriveLM_v2_bs10_lr5e-6"
     todays_date = datetime.now().strftime("%d-%m")
     sum_writer = SummaryWriter(log_dir=f"runs/{todays_date}_{run_name}")
 
-    start_new = False
+    start_new = True
     if start_new:
         # START FROM PRETRAINED WEIGHTS --------------------
         print("Loading pretrained weights...")
         start_epoch = 1
-        checkpoint = torch.load(r"/workspace/BLIP/output/Pretrain_BEV/Ex10_bs10_qs200_lr_5e-6_vit3_10_768_30.pth")
+        checkpoint = torch.load(r"/workspace/BLIP/ckpts/Ex10_bs10_qs200_lr_5e-6_vit3_10_768_30.pth")
         model.load_state_dict(checkpoint["model"], strict=False)
         print("Pretrained weights loaded!")
         # ----------------------------------------------------
@@ -221,7 +164,7 @@ def main(args, config):
     """
 
     with open(f"./logs/log_{todays_date}_{run_name}.txt", "w") as gen_log_file:
-        # validation(model, val_loader, 0, device, config, sum_writer, gen_log_file, gen_freq=100)
+        validation(model, val_loader, 0, device, sum_writer)
 
         print("Start training")
         start_time = time.time()
@@ -232,7 +175,7 @@ def main(args, config):
 
             train_stats = train(model, train_loader, optimizer, epoch, device, config, sum_writer, gen_log_file,
                                 gen_freq=1000)
-            validation(model, val_loader, epoch, device, config, sum_writer, gen_log_file, gen_freq=100)
+            validation(model, val_loader, epoch, device, sum_writer)
 
             if utils.is_main_process():
                 log_stats = {**{f"train_{k}": v for k, v in train_stats.items()},

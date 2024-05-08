@@ -21,10 +21,13 @@ class bev_drivelm_dataset(Dataset):
                     for q_dict in qs:
                         question = q_dict["Q"]
                         answer = q_dict["A"]
+                        tag = q_dict["tag"]
                         self.drivelm.append({"sample_token": keyframe,
                                              "question": question,
                                              "answer": answer,
-                                             "q_type": q_type})
+                                             "q_type": q_type,
+                                             "scene_token": scene,
+                                             "tag": tag})
 
     def __len__(self):
         return len(self.drivelm)
@@ -44,5 +47,5 @@ class bev_drivelm_dataset(Dataset):
             bev = torch.load(bev_file)
             bev = bev.squeeze()
 
-        return bev, drivelm_item["question"], drivelm_item["answer"], drivelm_item["q_type"]
+        return bev, drivelm_item["question"], drivelm_item["answer"], drivelm_item["tag"], drivelm_item["sample_token"], drivelm_item["scene_token"], drivelm_item["q_type"]
 
