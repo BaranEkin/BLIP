@@ -8,13 +8,13 @@ from multiprocessing import Pool
 
 import sys
 sys.path.append(".")
-from eval.drivelm.gpt_eval import GPTEvaluation
+# from eval.drivelm.gpt_eval import GPTEvaluation
 
 
 class evaluation_suit():
     def __init__(self):
         self.language_eval = language_evaluation.CocoEvaluator(coco_types=["BLEU", "ROUGE_L", "CIDEr"])
-        self.chatgpt_eval = GPTEvaluation()
+        # self.chatgpt_eval = GPTEvaluation()
         self.GPT = []
         self.accuracy = {"answer": [], "GT": []}
         self.language = {"answer": [], "GT": []}
@@ -144,9 +144,10 @@ class evaluation_suit():
         print("evaluation start!")
         scores = {}
         scores["accuracy"] = self.eval_acc()
-        scores["chatgpt"] = self.eval_chatGPT(self.GPT)
+        # scores["chatgpt"] = self.eval_chatGPT(self.GPT)
+        scores["chatgpt"] = 0
         scores["language"] = self.eval_language()
-        scores["match"] = self.eval_match()
+        # scores["match"] = self.eval_match()
 
         return scores
 

@@ -6,13 +6,18 @@ from eval.drivelm.evaluation import evaluation_suit
 def format_sentence_for_drivelm(sentence):
     # Function to capitalize the first letter of a sentence and after any '.', '!', or '?'
     def capitalize_after_punctuation(text):
-        return re.sub(r'(?<=[.!?])\s*(\w)', lambda m: m.group(1).upper(), text[0].upper() + text[1:])
+        try:
+            return re.sub(r'(?<=[.!?])\s*(\w)', lambda m: m.group(1).upper(), text[0].upper() + text[1:])
+        except:
+            return text
     
     # Remove unnecessary whitespaces between words and punctuation marks
     def remove_unnecessary_spaces(text):
-        text = re.sub(r'\s*([.,!?])\s*', r'\1 ', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
+        try:
+            text = re.sub(r'\s*([.,!?])\s*', r'\1 ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+        finally:
+            return text
     
     # Format the special block <,,,>
     def format_c_tag(text):
@@ -20,14 +25,36 @@ def format_sentence_for_drivelm(sentence):
             parts = match.group(0).strip('<>').split(',')
             formatted_parts = [parts[0].strip()] + [parts[1].strip().replace(' ', '').upper()] + [x.strip() for x in parts[2:]]
             return f"<{','.join(formatted_parts)}>"
+        try:
+            return re.sub(r'<[^>]*>', format_block, text)
+        except:
+            return text
         
-        return re.sub(r'<[^>]*>', format_block, text)
+    def format_multiple_choice(text):
+        try:
+            if text.startswith(("A", "B", "C", "D")) and len(text) < 10:
+                return text[0]
+            return text
+        except:
+            return text
+        
+    def format_yes_no(text):
+        try:
+            if len(text) < 10:
+                if text.startswith("Yes"):
+                    return text[:3] + "."
+                elif text.startswith("No ") or text == "No":
+                    return text[:2] + "."
+            return text
+        except:
+            return text
     
     # Apply transformations
     cleaned = remove_unnecessary_spaces(sentence)
     capitalized = capitalize_after_punctuation(cleaned)
-    final_sentence = format_c_tag(capitalized)
-    
+    c_tag_formatted = format_c_tag(capitalized)
+    multi_choice_formatted = format_multiple_choice(c_tag_formatted)
+    final_sentence = format_yes_no(multi_choice_formatted)
     return final_sentence
 
 def generate_drivelm_output(model, data_loader, epoch, device):
@@ -39,7 +66,7 @@ def generate_drivelm_output(model, data_loader, epoch, device):
         with open(f"/workspace/BLIP/eval/drivelm/outputs/output_{epoch}.json", "w") as out_json:
             id_list = []
             out_dicts = []
-            for i, (bev, question, answer, _, sample_token, scene_token, _) in enumerate(data_loader):
+            for i, (bev, question, answer, sample_token, scene_token) in enumerate(data_loader):
                 print(f"\r{i}/{len(data_loader)}", end="")
 
                 bev = bev.to(device, non_blocking=True)

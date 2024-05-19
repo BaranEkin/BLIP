@@ -21,10 +21,9 @@ def create_dataset(dataset, config, min_scale=0.5):
         return train_dataset, val_dataset
     
     elif dataset=='bev_drivelm':
-        bev_drivelm = bev_drivelm_dataset(config['bev_features_folder_train'], config['bev_features_folder_val'], config['drivelm_json_train'])
-        val_size = 66
-        val_dataset = torch.utils.data.Subset(bev_drivelm, range(val_size))
-        train_dataset = torch.utils.data.Subset(bev_drivelm, range(val_size, len(bev_drivelm)))
+        bev_drivelm = bev_drivelm_dataset(config['bev_features_folder_train'], config['bev_features_folder_val'], config['drivelm_jsons'])
+        val_size = int(len(bev_drivelm) * 0.01)
+        train_dataset, val_dataset = random_split(bev_drivelm, [len(bev_drivelm) - val_size, val_size], generator=torch.Generator().manual_seed(42))
         
         return train_dataset, val_dataset
     
